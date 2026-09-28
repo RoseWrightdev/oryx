@@ -12,7 +12,7 @@ oryx is a partitioned, state-replicated key-value database implemented in Go. In
 - High-concurrency sharded memory map (128 independent locks)
 - Active snapshot persistence and recovery serialization
 - Dynamic LRU cache TTL eviction
-- Dual reactor architecture (`gnet/v2` multi-core event loop + Linux `io_uring` driver)
+- `gnet/v2` multi-core event loop reactor
 - Native Redis RESP wire protocol + gRPC Client and Server API
 
 ## Performance & Benchmarks
@@ -91,7 +91,7 @@ go run examples/client/main.go
 
 ```mermaid
 flowchart TD
-    Client([Clients: RESP / gRPC]) -->|RESP / gRPC| Reactors["Wire Reactors\n(gnet / io_uring / gRPC)"]
+    Client([Clients: RESP / gRPC]) -->|RESP / gRPC| Reactors["Wire Reactors\n(gnet / gRPC)"]
     Reactors --> Engine[Engine Facade]
 
     subgraph Node[This Node]
