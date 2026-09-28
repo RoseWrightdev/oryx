@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,7 +53,8 @@ type RESPServer struct {
 	mu           sync.Mutex
 	bound        string
 	resolvedAddr string
-	gnetEng      *gnet.Engine
+	gnetEng      gnet.Engine
+	hasGnetEng   bool
 }
 
 func NewRESPServer(eng oryx.Database, addr string) *RESPServer {
@@ -78,10 +78,10 @@ func (s *RESPServer) Addr() string {
 }
 
 func (s *RESPServer) OnBoot(eng gnet.Engine) gnet.Action {
-	runtime.LockOSThread()
 	s.mu.Lock()
 	s.bound = s.resolvedAddr
-	s.gnetEng = &eng
+	s.gnetEng = eng
+	s.hasGnetEng = true
 	s.mu.Unlock()
 	return gnet.None
 }
@@ -349,8 +349,9 @@ func (s *RESPServer) Stop() {
 	s.stopOnce.Do(func() {
 		s.mu.Lock()
 		eng := s.gnetEng
+		hasEng := s.hasGnetEng
 		s.mu.Unlock()
-		if eng != nil {
+		if hasEng {
 			_ = eng.Stop(context.Background())
 		}
 	})

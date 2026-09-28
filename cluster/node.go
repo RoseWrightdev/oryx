@@ -122,14 +122,11 @@ func (n *Node) Stop() {
 
 // Get retrieves the value for a key locally, respects local tombstones, or proxies to an owner node.
 func (n *Node) Get(key kv.Key) ([]byte, bool) {
-	hash := kv.HashKey(security.HashFunc(key))
 	if n.meshConfig.SingleNode {
-		data, ok := n.core.HM().Get(key)
-		if ok && n.core.Evt() != nil {
-			n.core.Evt().Publish(key, hash)
-		}
-		return data, ok
+		return n.core.Get(key)
 	}
+
+	hash := kv.HashKey(security.HashFunc(key))
 
 	// Only trust local storage while still a current owner: a stale local
 	// copy from before a rebalance must not shadow the real owners (#61).
@@ -156,7 +153,6 @@ func (n *Node) isOwner(key kv.Key) bool {
 		rf = 1
 	}
 	owners := n.mesh.GetOwners(key, rf)
-	defer n.mesh.PutOwners(owners)
 	return slices.Contains(owners, n.meshConfig.NodeID)
 }
 

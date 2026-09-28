@@ -4,6 +4,7 @@ package evict
 import (
 	"context"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -168,7 +169,7 @@ func (lru *LeastRecentlyUsed) Publish(key kv.Key, hash kv.HashKey) {
 	// socket read buffer). The run() goroutine that eventually dequeues this
 	// message may not do so until long after Publish returns, by which point
 	// the original buffer can already have been reused (#79).
-	key = kv.Key(string([]byte(key)))
+	key = kv.Key(strings.Clone(string(key)))
 
 	select {
 	case shard.ch <- lruMsg{key: key, hash: hash}:

@@ -58,23 +58,10 @@ type engine struct {
 	evt             evict.Evictor
 	hm              *hashmap.ShardedMap
 	snp             *snap.Snapshotter
-	pools           *pools
 	nodeID          kv.NodeID
 	disableSnapshot bool
 	startOnce       sync.Once
 	stopOnce        sync.Once
-}
-
-type pools struct {
-	snapshotEntries sync.Pool
-}
-
-func newPools() *pools {
-	return &pools{
-		snapshotEntries: sync.Pool{
-			New: func() any { return &snap.SnapshotEntry{} },
-		},
-	}
 }
 
 // NewEngine creates and initializes a standalone core storage engine.
@@ -96,7 +83,6 @@ func NewEngine(config Config) (Engine, error) {
 		clock:           config.Clock,
 		evt:             config.Evt,
 		nodeID:          config.NodeID,
-		pools:           newPools(),
 		disableSnapshot: config.DisableSnapshot,
 	}
 
@@ -108,26 +94,18 @@ func NewEngine(config Config) (Engine, error) {
 
 	stateTransferEncoder := func(enc *gob.Encoder) error {
 		var encodeErr error
+		var snapEntry snap.SnapshotEntry
 		eng.hm.Range(func(k kv.Key, v kv.Value) bool {
-			snapEntry := eng.pools.snapshotEntries.Get().(*snap.SnapshotEntry)
 			snapEntry.Key = k
 			snapEntry.Data = v.Data
 			snapEntry.Timestamp = v.Timestamp
 			snapEntry.NodeID = kv.NodeID(v.NodeID)
 			snapEntry.Tombstone = v.Tombstone
 
-			if err := enc.Encode(snapEntry); err != nil {
+			if err := enc.Encode(&snapEntry); err != nil {
 				encodeErr = fmt.Errorf("failed to encode snapshot entry: %w", err)
-				snapEntry.Key = ""
-				snapEntry.Data = nil
-				snapEntry.NodeID = ""
-				eng.pools.snapshotEntries.Put(snapEntry)
 				return false
 			}
-			snapEntry.Key = ""
-			snapEntry.Data = nil
-			snapEntry.NodeID = ""
-			eng.pools.snapshotEntries.Put(snapEntry)
 			return true
 		})
 		return encodeErr
@@ -286,11 +264,8 @@ func (eng *engine) recover(snpPath string) error {
 		dec := gob.NewDecoder(file)
 		count := 0
 		for {
-			entry := eng.pools.snapshotEntries.Get().(*snap.SnapshotEntry)
-			if err := dec.Decode(entry); err != nil {
-				entry.Key = ""
-				entry.Data = nil
-				eng.pools.snapshotEntries.Put(entry)
+			var entry snap.SnapshotEntry
+			if err := dec.Decode(&entry); err != nil {
 				if err == io.EOF {
 					break
 				}
@@ -302,10 +277,6 @@ func (eng *engine) recover(snpPath string) error {
 				NodeID:    string(entry.NodeID),
 				Tombstone: entry.Tombstone,
 			})
-			entry.Key = ""
-			entry.Data = nil
-			entry.NodeID = ""
-			eng.pools.snapshotEntries.Put(entry)
 			count++
 		}
 		slog.Info("Loaded state from snapshot", "path", snpPath, "keys", count)

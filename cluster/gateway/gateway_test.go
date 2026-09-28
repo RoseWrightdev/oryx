@@ -56,8 +56,6 @@ func (m *MockMesher) GetOwners(_ kv.Key, _ int) []kv.NodeID {
 	return m.Owners
 }
 
-func (m *MockMesher) PutOwners(_ []kv.NodeID) {}
-
 func (m *MockMesher) AddressForNode(nodeID kv.NodeID) mesh.PeerAddress {
 	return m.AddrMap[nodeID]
 }

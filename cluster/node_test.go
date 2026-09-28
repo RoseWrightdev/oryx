@@ -41,7 +41,13 @@ func newFakeEngine() *fakeEngine {
 	}
 }
 
-func (f *fakeEngine) Get(kv.Key) ([]byte, bool)        { return nil, false }
+func (f *fakeEngine) Get(key kv.Key) ([]byte, bool) {
+	val, ok := f.hm.Get(key)
+	if ok && f.evt != nil {
+		f.evt.Publish(key, 0)
+	}
+	return val, ok
+}
 func (f *fakeEngine) Set(kv.Key, []byte) error         { return nil }
 func (f *fakeEngine) Put(kv.Key, kv.Value) error       { return nil }
 func (f *fakeEngine) Delete(kv.Key) (bool, error)      { return false, nil }
@@ -64,7 +70,6 @@ type nodeMockMesher struct {
 }
 
 func (m *nodeMockMesher) GetOwners(kv.Key, int) []kv.NodeID { return m.owners }
-func (m *nodeMockMesher) PutOwners([]kv.NodeID)             {}
 
 func newTestNode(t *testing.T, eng *fakeEngine, meshObj mesh.Mesher, nodeID kv.NodeID) *Node {
 	t.Helper()

@@ -162,7 +162,6 @@ func TestNopMesh(t *testing.T) {
 	assert.Nil(t, n.Members())
 	assert.Equal(t, kv.NodeID(""), n.Owner(kv.Key("key")))
 	assert.Nil(t, n.GetOwners(kv.Key("key"), 3))
-	n.PutOwners(nil)
 	assert.Equal(t, PeerAddress(""), n.AddressForNode(kv.NodeID("node")))
 	assert.NoError(t, n.Start())
 	assert.NoError(t, n.Stop())

@@ -54,7 +54,7 @@ func TestEnginePersistence(t *testing.T) {
 	assert.Nil(t, eng.Set(key1, val1))
 	assert.Nil(t, eng.Set(key2, val2))
 
-	coreEng := eng.(*singleNodeAdapter).Core()
+	coreEng := eng.Core()
 	err = coreEng.Snp().Create()
 	assert.Nil(t, err)
 
@@ -100,7 +100,7 @@ func TestEngine_DeletePersistence(t *testing.T) {
 func TestEngine_LWW(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e, _ := newDatabase(mockConfig)
-	eng := e.(*singleNodeAdapter).Core()
+	eng := e.Core()
 	eng.Start()
 	defer eng.Stop()
 
@@ -133,7 +133,7 @@ func TestEngine_LWW(t *testing.T) {
 func TestEngine_TombstoneLWW(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e, _ := newDatabase(mockConfig)
-	eng := e.(*singleNodeAdapter).Core()
+	eng := e.Core()
 	eng.Start()
 	defer eng.Stop()
 
@@ -166,12 +166,12 @@ func TestEngine_TombstoneLWW(t *testing.T) {
 func TestEngine_SyncLogic(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e1, _ := newDatabase(mockConfig)
-	eng1 := e1.(*singleNodeAdapter).Core()
+	eng1 := e1.Core()
 	eng1.Start()
 	defer eng1.Stop()
 
 	e2, _ := newDatabase(mockConfig)
-	eng2 := e2.(*singleNodeAdapter).Core()
+	eng2 := e2.Core()
 	eng2.Start()
 	defer eng2.Stop()
 

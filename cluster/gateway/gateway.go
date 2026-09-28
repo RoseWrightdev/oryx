@@ -84,7 +84,6 @@ func (g *Gateway) stateWriter() (StateWriter, error) {
 func (g *Gateway) Get(key kv.Key) ([]byte, bool) {
 	rf := g.getReplicationFactor()
 	owners := g.mesh.GetOwners(key, rf)
-	defer g.mesh.PutOwners(owners)
 
 	for _, owner := range owners {
 		if owner == g.meshConfig.NodeID {
@@ -101,7 +100,6 @@ func (g *Gateway) Get(key kv.Key) ([]byte, bool) {
 func (g *Gateway) Set(key kv.Key, value []byte, ts int64) error {
 	rf := g.getReplicationFactor()
 	owners := g.mesh.GetOwners(key, rf)
-	defer g.mesh.PutOwners(owners)
 
 	if len(owners) == 0 {
 		return fmt.Errorf("no replica owners found for key: %s", key)
@@ -160,7 +158,6 @@ func (g *Gateway) Set(key kv.Key, value []byte, ts int64) error {
 func (g *Gateway) Delete(key kv.Key, ts int64) (bool, error) {
 	rf := g.getReplicationFactor()
 	owners := g.mesh.GetOwners(key, rf)
-	defer g.mesh.PutOwners(owners)
 
 	if len(owners) == 0 {
 		return false, fmt.Errorf("no replica owners found for key: %s", key)

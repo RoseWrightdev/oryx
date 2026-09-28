@@ -30,6 +30,7 @@ type Database interface {
 	GossipAddr() string
 	Mesh() mesh.Mesher
 	Creds() credentials.TransportCredentials
+	Core() core.Engine
 }
 
 // DatabaseConfig specifies the parameters required to initialize and run a oryx Database.
@@ -69,24 +70,11 @@ func newDatabase(config DatabaseConfig) (Database, error) {
 		return nil, err
 	}
 
-	if config.meshConfig.SingleNode {
-		return &singleNodeAdapter{
-			Engine: coreEng,
-			config: config.meshConfig,
-			creds:  config.creds,
-		}, nil
-	}
-
 	clusterConfig := cluster.Config{
 		MeshConfig:     config.meshConfig,
 		Creds:          config.creds,
 		GossipInterval: config.gossipInterval,
 	}
 
-	node, err := cluster.NewNode(coreEng, clusterConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	return node, nil
+	return cluster.NewNode(coreEng, clusterConfig)
 }

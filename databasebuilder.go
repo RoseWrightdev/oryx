@@ -237,19 +237,19 @@ func (eb *DatabaseBuilder) FastTest() *DatabaseBuilder {
 
 // Build validates the configuration and returns a new Database instance.
 func (eb *DatabaseBuilder) Build() (Database, error) {
-	if isUnit(eb.walPath) {
+	if isZero(eb.walPath) {
 		return nil, fmt.Errorf("required eb.walPath is unset; configure eb.walPath with SetWalPath(path string)")
 	}
 
-	if isUnit(eb.snpPath) {
+	if isZero(eb.snpPath) {
 		return nil, fmt.Errorf("required eb.snpPath is unset; configure eb.snpPath with SetSnpPath(path string)")
 	}
 
-	if isUnit(eb.walInterval) {
+	if isZero(eb.walInterval) {
 		return nil, fmt.Errorf("required eb.walInterval is unset; configure eb.walInterval with SetWalInterval(interval time.Duration)")
 	}
 
-	if isUnit(eb.snpInterval) {
+	if isZero(eb.snpInterval) {
 		return nil, fmt.Errorf("required eb.snpInterval is unset; configure eb.snpInterval with SetSnpInterval(interval time.Duration)")
 	}
 
@@ -257,11 +257,11 @@ func (eb *DatabaseBuilder) Build() (Database, error) {
 		return nil, fmt.Errorf("transport credentials are required; use Setcreds(creds) or SetInsecure() for development")
 	}
 
-	if isUnit(eb.walBufferSize) {
+	if isZero(eb.walBufferSize) {
 		return nil, fmt.Errorf("required eb.walBufferSize is unset; configure eb.walBufferSize with SetWalBufferSize(size uint32)")
 	}
 
-	if isUnit(eb.walSegments) {
+	if isZero(eb.walSegments) {
 		return nil, fmt.Errorf("required eb.walSegments is unset; configure eb.walSegments with SetWalSegments(count int)")
 	}
 
@@ -279,7 +279,7 @@ func (eb *DatabaseBuilder) Build() (Database, error) {
 
 	if !meshConfig.SingleNode {
 		// GrpcPort 0 is allowed for dynamic allocation (e.g., in tests)
-		if isUnit(eb.gossipInterval) {
+		if isZero(eb.gossipInterval) {
 			return nil, fmt.Errorf("required eb.gossipInterval is unset for distributed mode; configure it via SetGossipInterval")
 		}
 		if meshConfig.ReplicationFailureMode == "" {
@@ -306,7 +306,7 @@ func (eb *DatabaseBuilder) Build() (Database, error) {
 	return newDatabase(config)
 }
 
-func isUnit[T comparable](val T) bool {
+func isZero[T comparable](val T) bool {
 	var zero T
 	return zero == val
 }

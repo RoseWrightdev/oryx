@@ -255,9 +255,7 @@ func (s *Syncer) isRequesterResponsible(key string, requesterID kv.NodeID) bool 
 		return true
 	}
 	owners := s.mesh.GetOwners(kv.Key(key), s.meshConfig.ReplicationFactor)
-	isResponsible := slices.Contains(owners, requesterID)
-	s.mesh.PutOwners(owners)
-	return isResponsible
+	return slices.Contains(owners, requesterID)
 }
 
 // buildSetRequest builds a Pull response entry. Not pool-leased: it's

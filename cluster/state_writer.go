@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"bytes"
+
 	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/core"
 	"github.com/rosewrightdev/oryx/kv"
@@ -23,19 +25,10 @@ func NewStorageStateWriter(eng core.Engine) *StorageStateWriter {
 	return &StorageStateWriter{eng: eng}
 }
 
-func cloneBytes(b []byte) []byte {
-	if b == nil {
-		return nil
-	}
-	out := make([]byte, len(b))
-	copy(out, b)
-	return out
-}
-
 // ApplySet translates a network protobuf SetRequest into a native storage Set mutation.
 func (w *StorageStateWriter) ApplySet(req *pb.SetRequest) error {
 	return w.eng.Put(req.Key, kv.Value{
-		Data:      cloneBytes(req.Value),
+		Data:      bytes.Clone(req.Value),
 		Timestamp: req.Timestamp,
 		NodeID:    req.NodeId,
 		Tombstone: false,
