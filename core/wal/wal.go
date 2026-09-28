@@ -62,7 +62,6 @@ func (s *walSegment) backgroundSync() {
 
 // Wal implements the durable Write-Ahead Log (WAL) partitioned into segment files.
 type Wal struct {
-	headerPool sync.Pool
 	bufferPool sync.Pool
 	segments   []*walSegment
 	count      int
@@ -77,12 +76,6 @@ func NewWal(dirPath string, syncInterval time.Duration, bufferSize uint32, segme
 	wal := &Wal{
 		segments: make([]*walSegment, segmentCount),
 		count:    segmentCount,
-		headerPool: sync.Pool{
-			New: func() any {
-				b := make([]byte, 4)
-				return &b
-			},
-		},
 		bufferPool: sync.Pool{
 			New: func() any {
 				b := make([]byte, 0, 2048)
@@ -162,10 +155,8 @@ func (w *Wal) getSegment(hash kv.HashKey) *walSegment {
 
 // Publish appends a write entry to the partition-segmented write-ahead log under proper segment locks.
 func (w *Wal) Publish(key kv.Key, hash kv.HashKey, val kv.Value) error {
-	keyBytes := []byte(key)
-	nodeIDBytes := []byte(val.NodeID)
-	keyLen := len(keyBytes)
-	nodeIDLen := len(nodeIDBytes)
+	keyLen := len(key)
+	nodeIDLen := len(val.NodeID)
 
 	dataLen := 0
 	op := opDelete
@@ -194,12 +185,12 @@ func (w *Wal) Publish(key kv.Key, hash kv.HashKey, val kv.Value) error {
 	buf[4] = op
 	binary.BigEndian.PutUint64(buf[5:13], uint64(val.Timestamp))
 	binary.BigEndian.PutUint16(buf[13:15], uint16(keyLen))
-	copy(buf[15:15+keyLen], keyBytes)
+	copy(buf[15:15+keyLen], key)
 
 	offset := 15 + keyLen
 	binary.BigEndian.PutUint16(buf[offset:offset+2], uint16(nodeIDLen))
 	offset += 2
-	copy(buf[offset:offset+nodeIDLen], nodeIDBytes)
+	copy(buf[offset:offset+nodeIDLen], val.NodeID)
 	offset += nodeIDLen
 
 	if op == opSet {
@@ -254,9 +245,7 @@ func (w *Wal) replaySegment(seg *walSegment, results map[kv.Key]kv.Value, result
 	}
 
 	reader := bufio.NewReader(seg.file)
-	headerPtr := w.headerPool.Get().(*[]byte)
-	header := *headerPtr
-	defer w.headerPool.Put(headerPtr)
+	var header [4]byte
 
 	payloadPtr := w.bufferPool.Get().(*[]byte)
 	payload := *payloadPtr
@@ -266,14 +255,14 @@ func (w *Wal) replaySegment(seg *walSegment, results map[kv.Key]kv.Value, result
 	}()
 
 	for {
-		if _, err := io.ReadFull(reader, header); err != nil {
+		if _, err := io.ReadFull(reader, header[:]); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return err
 		}
 
-		size := int(binary.BigEndian.Uint32(header))
+		size := int(binary.BigEndian.Uint32(header[:]))
 		if cap(payload) < size {
 			payload = make([]byte, size)
 		}

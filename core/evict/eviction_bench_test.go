@@ -20,10 +20,11 @@ func BenchmarkEviction_Publish(b *testing.B) {
 		return nil
 	})
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		evt.Publish(fmt.Sprintf("key-%d", i), uint64(i))
+		i++
 	}
 }
 
@@ -36,9 +37,10 @@ func BenchmarkEviction_PublishDelete(b *testing.B) {
 	evt.Start()
 	defer evt.Stop()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		evt.PublishDelete(fmt.Sprintf("key-%d", i), uint64(i))
+		i++
 	}
 }

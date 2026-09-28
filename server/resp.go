@@ -171,8 +171,7 @@ func (s *RESPServer) dispatchToBuffer(args [][]byte, out []byte) []byte {
 			// storing them. The buffer is reused by the event loop for new packets,
 			// which would silently corrupt any stored slices/strings that alias it.
 			key := string(args[1]) // safe heap copy
-			val := make([]byte, len(args[2]))
-			copy(val, args[2])
+			val := bytes.Clone(args[2])
 			if err := s.eng.Set(kv.Key(key), val); err != nil {
 				return append(out, fmt.Sprintf("-ERR %v\r\n", err)...)
 			}
