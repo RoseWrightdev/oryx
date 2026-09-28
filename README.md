@@ -91,52 +91,59 @@ go run examples/client/main.go
 
 ```mermaid
 flowchart TD
-    Client([Clients: RESP / gRPC]) -->|RESP / gRPC| Reactors["Wire Reactors\n(gnet / gRPC)"]
-    Reactors --> Engine[Engine Facade]
+    Client(["Clients: RESP / gRPC"]) -->|Wire Protocols| Reactors["Wire Reactors (gnet / io_uring / gRPC)"]
+    Reactors --> Node["Cluster Node (cluster.Node / Database)"]
 
-    subgraph Node[This Node]
+    subgraph Cluster["Cluster Layer"]
         direction TB
-
-        subgraph Storage[Storage Core]
-            WAL[(Write-Ahead Log)]
-            ShardedMap[(128-Sharded Map)]
-            Snapshot[Snapshotter]
-            Disk(Disk)
-        end
-
-        subgraph Routing[Gateway & Routing]
-            Gateway[Gateway]
-            Ring[Hash Ring]
-        end
-
-        subgraph Replication[Incoming Replication]
-            Gossip["Gossip Handler\n(UDP, receive-only)"]
-            Syncer[Anti-Entropy Syncer]
-            Writer[StorageStateWriter]
-        end
-
-        Engine -->|"Set / Delete"| Gateway
-        Gateway -->|GetOwners| Ring
-        Gateway -->|"Local replica"| Writer
-        Writer -->|"Put (LWW)"| Engine
-        Engine -->|Last Write Wins| ShardedMap
-        Engine --> WAL
-        Engine -->|"Local lookup"| ShardedMap
-
-        Gossip -->|ApplySet / ApplyDelete| Writer
-        Syncer -->|ApplySet / ApplyDelete| Writer
-
-        WAL --> Disk
-        Snapshot --> Disk
-        ShardedMap <-->|Serialize / Load| Snapshot
-        Evictor["LRU Cache"] --> ShardedMap
+        Gateway["Gateway (Proxy & Fanout)"]
+        Ring["Consistent Hash Ring (Virtual Nodes)"]
+        Mesh["P2P Mesh (memberlist / UDP Gossip)"]
+        Syncer["Anti-Entropy Syncer (3-Level Merkle Tree)"]
+        StateWriter["StorageStateWriter (Wire Protocol Adapter)"]
     end
 
-    Peers([Remote Peer Nodes])
+    subgraph Storage["Storage Core (core.Engine)"]
+        direction TB
+        HLC["Hybrid Logical Clock (HLC / LWW)"]
+        ShardedMap["128-Sharded Map (Swiss Tables)"]
+        WAL["Segmented WAL (Binary Framing)"]
+        Snapshot["Snapshotter"]
+        Evictor["LRU Cache (TTL & Capacity Eviction)"]
+    end
 
-    Gateway -->|"gRPC proxy"| Peers
-    Peers -->|"UDP gossip (inbound)"| Gossip
-    Syncer <-->|TCP anti-entropy| Peers
+    subgraph DiskStorage["Durable Storage"]
+        WALDisk[("WAL Segment Files (seg_*.log)")]
+        SnapDisk[("Snapshot File (snapshot.bin)")]
+    end
+
+    Peers(["Remote Peer Nodes"])
+
+    %% Request & routing flows
+    Node -->|"Distributed Read / Write"| Gateway
+    Node -->|"Single-Node Fast-Path"| Storage
+    Gateway -->|Consistent Hashing| Ring
+    Gateway -->|"Local Replica Write"| StateWriter
+    Gateway -->|"gRPC Proxy"| Peers
+
+    %% Cluster discovery & anti-entropy
+    Mesh -->|Membership & Weights| Ring
+    Mesh <-->|UDP Gossip| Peers
+    Syncer <-->|gRPC State Reconciliation| Peers
+    Syncer -->|Replication Updates| StateWriter
+
+    %% State persistence & engine flow
+    StateWriter -->|"Native Put (LWW)"| Storage
+    Storage --> HLC
+    Storage --> ShardedMap
+    Storage --> Evictor
+    Storage --> WAL
+    Storage --> Snapshot
+
+    %% Disk persistence
+    WAL --> WALDisk
+    Snapshot --> SnapDisk
+    ShardedMap <-->|"State Recovery / Dump"| Snapshot
 ```
 
 ## Running Benchmarks & Profiling
