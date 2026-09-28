@@ -17,7 +17,7 @@ oryx is a partitioned, state-replicated key-value database implemented in Go. In
 
 ## Performance & Benchmarks
 
-All benchmarks conducted locally on an Apple M4 Max (14 cores, 64GB RAM, Go 1.26.6) and LinuxKit Kernel 6.12.
+All benchmarks conducted locally on an Apple M4 Max (14 cores, 64GB RAM, Go 1.27.1) and LinuxKit Kernel 6.12.
 
 ### 1. Storage Core Benchmark vs Production Go DBs
 ```bash
@@ -26,30 +26,26 @@ cd benchmarks && go test -bench=BenchmarkComparative_Get_Parallel -benchmem ./..
 
 | Database Engine | Throughput (Reads/sec) | Latency (ns/op) | Memory/op | Allocs/op |
 | :--- | :--- | :--- | :--- | :--- |
-| sync.Map (Go Stdlib Baseline) | 940,274,300 reads/s | 1.43 ns | 0 B | 0 allocs |
-| oryx (Lock-Free Sharded Core) | 160,276,000 reads/s | 7.10 ns/op | 0 B | 0 allocs |
-| concurrent-map (Orcaman) | 55,551,589 reads/s | 21.30 ns | 0 B | 0 allocs |
-| BuntDB (In-Memory + AOF) | 7,394,725 reads/s | 161.20 ns | 72 B | 2 allocs |
-| CockroachDB Pebble | 6,973,873 reads/s | 171.60 ns | 8 B | 1 allocs |
-| NutsDB | 3,759,220 reads/s | 313.80 ns | 272 B | 7 allocs |
-| BadgerDB (Dgraph) | 1,677,006 reads/s | 747.30 ns | 360 B | 7 allocs |
-| bbolt (etcd / Kubernetes) | 1,000,000 reads/s | 1,044.00 ns | 480 B | 8 allocs |
-
-
-
-
+| sync.Map (Go Stdlib Baseline) | 975,489,800 reads/s | 1.25 ns | 0 B | 0 allocs |
+| oryx (Sharded Core) | 97,853,475 reads/s | 12.21 ns | 0 B | 0 allocs |
+| concurrent-map (Orcaman) | 55,129,110 reads/s | 21.69 ns | 0 B | 0 allocs |
+| BuntDB (In-Memory + AOF) | 7,401,095 reads/s | 161.80 ns | 72 B | 2 allocs |
+| CockroachDB Pebble | 7,335,370 reads/s | 163.70 ns | 8 B | 1 allocs |
+| NutsDB | 4,254,405 reads/s | 282.20 ns | 272 B | 7 allocs |
+| BadgerDB (Dgraph) | 1,770,595 reads/s | 680.50 ns | 360 B | 7 allocs |
+| bbolt (etcd / Kubernetes) | 1,000,000 reads/s | 1,004.00 ns | 480 B | 8 allocs |
 
 ### 2. Storage Engine Micro-benchmarks
 Micro-benchmarks measuring direct storage interaction with the 128-sharded memory core + WAL (`go test -bench=. -benchmem`):
 
 | Benchmark | Workload / Operation | Throughput (ops/sec) | Latency | Memory / Allocations |
 | :--- | :--- | :--- | :--- | :--- |
-| Get (Parallel) | Concurrent Point Reads | ~160,276,000 ops/s | 7.10 ns/op | 0 B/op (0 allocs) |
-| Get (Single-thread) | Sequential Point Read | ~25,265,000 ops/s | 52.07 ns/op | 0 B/op (0 allocs) |
-| Set (Parallel + WAL) | Concurrent Writes + WAL | ~1,332,000 ops/s | 798.20 ns/op | 136 B/op (2 allocs) |
-| Set (Single-thread + WAL) | Sequential Write + WAL | ~2,962,000 ops/s | 407.50 ns/op | 64 B/op (1 allocs) |
-| Delete (Parallel + WAL) | Concurrent Tombstones + WAL | ~766,960,000 ops/s | 1.53 ns/op | 0 B/op (0 allocs) |
-| Delete (Single-thread + WAL) | Sequential Tombstone + WAL | ~89,730,000 ops/s | 13.52 ns/op | 0 B/op (0 allocs) |
+| Get (Parallel) | Concurrent Point Reads | ~96,500,000 ops/s | 11.93 ns/op | 0 B/op (0 allocs) |
+| Get (Single-thread) | Sequential Point Read | ~23,830,000 ops/s | 49.86 ns/op | 0 B/op (0 allocs) |
+| Set (Parallel + WAL) | Concurrent Writes + WAL | ~1,254,000 ops/s | 904.90 ns/op | 8 B/op (0 allocs) |
+| Set (Single-thread + WAL) | Sequential Write + WAL | ~5,417,000 ops/s | 209.20 ns/op | 1 B/op (0 allocs) |
+| Delete (Parallel + WAL) | Concurrent Tombstones + WAL | ~186,267,000 ops/s | 6.48 ns/op | 0 B/op (0 allocs) |
+| Delete (Single-thread + WAL) | Sequential Tombstone + WAL | ~100,000,000 ops/s | 11.90 ns/op | 0 B/op (0 allocs) |
 
 
 ## Quick Start
@@ -95,52 +91,59 @@ go run examples/client/main.go
 
 ```mermaid
 flowchart TD
-    Client([Clients: RESP / gRPC]) -->|RESP / gRPC| Reactors["Wire Reactors\n(gnet / gRPC)"]
-    Reactors --> Engine[Engine Facade]
+    Client(["Clients: RESP / gRPC"]) -->|Wire Protocols| Reactors["Wire Reactors (gnet / io_uring / gRPC)"]
+    Reactors --> Node["Cluster Node (cluster.Node / Database)"]
 
-    subgraph Node[This Node]
+    subgraph Cluster["Cluster Layer"]
         direction TB
-
-        subgraph Storage[Storage Core]
-            WAL[(Write-Ahead Log)]
-            ShardedMap[(128-Sharded Map)]
-            Snapshot[Snapshotter]
-            Disk(Disk)
-        end
-
-        subgraph Routing[Gateway & Routing]
-            Gateway[Gateway]
-            Ring[Hash Ring]
-        end
-
-        subgraph Replication[Incoming Replication]
-            Gossip["Gossip Handler\n(UDP, receive-only)"]
-            Syncer[Anti-Entropy Syncer]
-            Writer[StorageWriter]
-        end
-
-        Engine -->|"Set / Delete"| Gateway
-        Gateway -->|GetOwners| Ring
-        Gateway -->|"Local replica"| Writer
-        Writer -->|Last Write Wins| ShardedMap
-
-        Writer --> WAL
-        Engine -->|"Local lookup"| ShardedMap
-
-        Gossip -->|ApplySet / ApplyDelete| Writer
-        Syncer -->|ApplySet / ApplyDelete| Writer
-
-        WAL --> Disk
-        Snapshot --> Disk
-        ShardedMap <-->|Serialize / Load| Snapshot
-        Evictor["LRU Cache"] --> ShardedMap
+        Gateway["Gateway (Proxy & Fanout)"]
+        Ring["Consistent Hash Ring (Virtual Nodes)"]
+        Mesh["P2P Mesh (memberlist / UDP Gossip)"]
+        Syncer["Anti-Entropy Syncer (3-Level Merkle Tree)"]
+        StateWriter["StorageStateWriter (Wire Protocol Adapter)"]
     end
 
-    Peers([Remote Peer Nodes])
+    subgraph Storage["Storage Core (core.Engine)"]
+        direction TB
+        HLC["Hybrid Logical Clock (HLC / LWW)"]
+        ShardedMap["128-Sharded Map (Swiss Tables)"]
+        WAL["Segmented WAL (Binary Framing)"]
+        Snapshot["Snapshotter"]
+        Evictor["LRU Cache (TTL & Capacity Eviction)"]
+    end
 
-    Gateway -->|"gRPC proxy"| Peers
-    Peers -->|"UDP gossip (inbound)"| Gossip
-    Syncer <-->|TCP anti-entropy| Peers
+    subgraph DiskStorage["Durable Storage"]
+        WALDisk[("WAL Segment Files (seg_*.log)")]
+        SnapDisk[("Snapshot File (snapshot.bin)")]
+    end
+
+    Peers(["Remote Peer Nodes"])
+
+    %% Request & routing flows
+    Node -->|"Distributed Read / Write"| Gateway
+    Node -->|"Single-Node Fast-Path"| Storage
+    Gateway -->|Consistent Hashing| Ring
+    Gateway -->|"Local Replica Write"| StateWriter
+    Gateway -->|"gRPC Proxy"| Peers
+
+    %% Cluster discovery & anti-entropy
+    Mesh -->|Membership & Weights| Ring
+    Mesh <-->|UDP Gossip| Peers
+    Syncer <-->|gRPC State Reconciliation| Peers
+    Syncer -->|Replication Updates| StateWriter
+
+    %% State persistence & engine flow
+    StateWriter -->|"Native Put (LWW)"| Storage
+    Storage --> HLC
+    Storage --> ShardedMap
+    Storage --> Evictor
+    Storage --> WAL
+    Storage --> Snapshot
+
+    %% Disk persistence
+    WAL --> WALDisk
+    Snapshot --> SnapDisk
+    ShardedMap <-->|"State Recovery / Dump"| Snapshot
 ```
 
 ## Running Benchmarks & Profiling

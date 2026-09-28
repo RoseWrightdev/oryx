@@ -9,43 +9,57 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/kv"
-	"google.golang.org/protobuf/proto"
 )
 
 func FuzzWalReplay(f *testing.F) {
 	// Build seed corpus with valid WAL segment data
 	var buf bytes.Buffer
 
-	entry1, _ := proto.Marshal(&pb.WalEntry{
-		Entry: &pb.WalEntry_Set{
-			Set: &pb.SetRequest{
-				Key:       "user:1",
-				Value:     []byte("value1"),
-				Timestamp: 100,
-				NodeId:    "node-1",
-			},
-		},
-	})
+	// Seed 1: Set
+	key1 := []byte("user:1")
+	node1 := []byte("node-1")
+	val1 := []byte("value1")
+	payloadLen1 := 1 + 8 + 2 + len(key1) + 2 + len(node1) + 4 + len(val1)
 	hdr1 := make([]byte, 4)
-	binary.BigEndian.PutUint32(hdr1, uint32(len(entry1)))
+	binary.BigEndian.PutUint32(hdr1, uint32(payloadLen1))
 	buf.Write(hdr1)
-	buf.Write(entry1)
+	buf.WriteByte(opSet)
+	var ts1 [8]byte
+	binary.BigEndian.PutUint64(ts1[:], 100)
+	buf.Write(ts1[:])
+	var klen1 [2]byte
+	binary.BigEndian.PutUint16(klen1[:], uint16(len(key1)))
+	buf.Write(klen1[:])
+	buf.Write(key1)
+	var nlen1 [2]byte
+	binary.BigEndian.PutUint16(nlen1[:], uint16(len(node1)))
+	buf.Write(nlen1[:])
+	buf.Write(node1)
+	var dlen1 [4]byte
+	binary.BigEndian.PutUint32(dlen1[:], uint32(len(val1)))
+	buf.Write(dlen1[:])
+	buf.Write(val1)
 
-	entry2, _ := proto.Marshal(&pb.WalEntry{
-		Entry: &pb.WalEntry_Delete{
-			Delete: &pb.DeleteRequest{
-				Key:       "user:2",
-				Timestamp: 101,
-				NodeId:    "node-1",
-			},
-		},
-	})
+	// Seed 2: Delete
+	key2 := []byte("user:2")
+	node2 := []byte("node-1")
+	payloadLen2 := 1 + 8 + 2 + len(key2) + 2 + len(node2)
 	hdr2 := make([]byte, 4)
-	binary.BigEndian.PutUint32(hdr2, uint32(len(entry2)))
+	binary.BigEndian.PutUint32(hdr2, uint32(payloadLen2))
 	buf.Write(hdr2)
-	buf.Write(entry2)
+	buf.WriteByte(opDelete)
+	var ts2 [8]byte
+	binary.BigEndian.PutUint64(ts2[:], 101)
+	buf.Write(ts2[:])
+	var klen2 [2]byte
+	binary.BigEndian.PutUint16(klen2[:], uint16(len(key2)))
+	buf.Write(klen2[:])
+	buf.Write(key2)
+	var nlen2 [2]byte
+	binary.BigEndian.PutUint16(nlen2[:], uint16(len(node2)))
+	buf.Write(nlen2[:])
+	buf.Write(node2)
 
 	f.Add([]byte{})
 	f.Add(buf.Bytes())

@@ -235,9 +235,8 @@ func BenchmarkRESPServer_Get(b *testing.B) {
 	cmd := []byte("*2\r\n$3\r\nGET\r\n$8\r\nbenchkey\r\n")
 	buf := make([]byte, 256)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := conn.Write(cmd); err != nil {
 			b.Fatalf("write: %v", err)
 		}
@@ -283,9 +282,8 @@ func BenchmarkRESPServer_Set(b *testing.B) {
 	cmd := []byte("*3\r\n$3\r\nSET\r\n$8\r\nbenchkey\r\n$10\r\nbenchvalue\r\n")
 	buf := make([]byte, 256)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := conn.Write(cmd); err != nil {
 			b.Fatalf("write: %v", err)
 		}

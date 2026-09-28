@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/kv"
 	"github.com/rosewrightdev/oryx/security"
 	"github.com/stretchr/testify/assert"
@@ -35,11 +34,11 @@ func TestNewWal(t *testing.T) {
 func TestPublish(t *testing.T) {
 	defer cleanupWal(t)
 
-	req := pb.SetRequest{Key: "key", Value: []byte{byte(32)}, Timestamp: 100}
 	wal, err := NewWal(mockWalPath, mockWalInterval, mockWalBufferSize, 1)
 	assert.Nil(t, err)
 
-	err = wal.Publish(req.Key, security.HashFunc(req.Key), &req)
+	val := kv.Value{Data: []byte{32}, Timestamp: 100, NodeID: "node-1"}
+	err = wal.Publish("key", security.HashFunc("key"), val)
 	assert.Nil(t, err)
 
 	replay, err := wal.Replay()
@@ -60,8 +59,8 @@ func TestReplay(t *testing.T) {
 		key, val := strconv.Itoa(i), []byte{byte(i)}
 		exceptedValues[i] = val
 		exceptedKeys[i] = key
-		req := pb.SetRequest{Key: key, Value: val, Timestamp: int64(i)}
-		err = wal.Publish(key, security.HashFunc(key), &req)
+		v := kv.Value{Data: val, Timestamp: int64(i), NodeID: "n1"}
+		err = wal.Publish(key, security.HashFunc(key), v)
 		assert.Nil(t, err)
 	}
 	replay, err := wal.Replay()
@@ -99,8 +98,8 @@ func TestWal_PrepareSnapshot(t *testing.T) {
 	// Write entries so segment files are non-empty
 	for i := range 20 {
 		key := strconv.Itoa(i)
-		req := pb.SetRequest{Key: key, Value: []byte{byte(i)}, Timestamp: int64(i)}
-		assert.Nil(t, wal.Publish(key, security.HashFunc(key), &req))
+		val := kv.Value{Data: []byte{byte(i)}, Timestamp: int64(i), NodeID: "n1"}
+		assert.Nil(t, wal.Publish(key, security.HashFunc(key), val))
 	}
 
 	offsets, err := wal.PrepareSnapshot()
@@ -122,8 +121,8 @@ func TestWal_ClearWithOffsets(t *testing.T) {
 	// Write some entries before snapshot point
 	for i := range 5 {
 		key := strconv.Itoa(i)
-		req := pb.SetRequest{Key: key, Value: []byte{byte(i)}, Timestamp: int64(i)}
-		assert.Nil(t, wal.Publish(key, security.HashFunc(key), &req))
+		val := kv.Value{Data: []byte{byte(i)}, Timestamp: int64(i), NodeID: "n1"}
+		assert.Nil(t, wal.Publish(key, security.HashFunc(key), val))
 	}
 
 	// Capture snapshot offsets
@@ -133,8 +132,8 @@ func TestWal_ClearWithOffsets(t *testing.T) {
 	// Write more entries AFTER the snapshot point
 	postKeys := []string{"post-a", "post-b", "post-c"}
 	for _, k := range postKeys {
-		req := pb.SetRequest{Key: k, Value: []byte("post-snapshot"), Timestamp: 999}
-		assert.Nil(t, wal.Publish(k, security.HashFunc(k), &req))
+		val := kv.Value{Data: []byte("post-snapshot"), Timestamp: 999, NodeID: "n1"}
+		assert.Nil(t, wal.Publish(k, security.HashFunc(k), val))
 	}
 
 	// Clear with offsets: only data before snapshot should be removed;
@@ -167,8 +166,8 @@ func TestWal_ClearLeavesOriginalIntactOnFailure(t *testing.T) {
 
 	for i := range 5 {
 		key := strconv.Itoa(i)
-		req := pb.SetRequest{Key: key, Value: []byte{byte(i)}, Timestamp: int64(i)}
-		require.NoError(t, wal.Publish(key, security.HashFunc(key), &req))
+		val := kv.Value{Data: []byte{byte(i)}, Timestamp: int64(i), NodeID: "n1"}
+		require.NoError(t, wal.Publish(key, security.HashFunc(key), val))
 	}
 
 	offsets, err := wal.PrepareSnapshot()
@@ -176,8 +175,8 @@ func TestWal_ClearLeavesOriginalIntactOnFailure(t *testing.T) {
 
 	postKeys := []string{"post-a", "post-b"}
 	for _, k := range postKeys {
-		req := pb.SetRequest{Key: k, Value: []byte("post-snapshot"), Timestamp: 999}
-		require.NoError(t, wal.Publish(k, security.HashFunc(k), &req))
+		val := kv.Value{Data: []byte("post-snapshot"), Timestamp: 999, NodeID: "n1"}
+		require.NoError(t, wal.Publish(k, security.HashFunc(k), val))
 	}
 
 	segPath := mockWalPath + "/seg_00.log"
@@ -220,8 +219,8 @@ func TestWal_ClearNilOffsets(t *testing.T) {
 
 	for i := range 10 {
 		key := strconv.Itoa(i)
-		req := pb.SetRequest{Key: key, Value: []byte{byte(i)}, Timestamp: int64(i)}
-		assert.Nil(t, wal.Publish(key, security.HashFunc(key), &req))
+		val := kv.Value{Data: []byte{byte(i)}, Timestamp: int64(i), NodeID: "n1"}
+		assert.Nil(t, wal.Publish(key, security.HashFunc(key), val))
 	}
 
 	// Clear(nil) should truncate all segments entirely
@@ -236,8 +235,6 @@ func TestWal_ExtraEdgeCases(t *testing.T) {
 	defer cleanupWal(t)
 
 	// 1. NewWal directory creation failure
-	// We can create a regular file first, then try to create WAL with that file's path as the directory.
-	// This will make os.MkdirAll fail.
 	tmpFile, err := os.CreateTemp("", "wal-failure-test-*")
 	require.NoError(t, err)
 	defer func() {
@@ -248,27 +245,17 @@ func TestWal_ExtraEdgeCases(t *testing.T) {
 	_, err = NewWal(tmpFile.Name(), mockWalInterval, mockWalBufferSize, 1)
 	assert.Error(t, err)
 
-	// 2. Publish pb.WalEntry directly
+	// 2. Publish Set and Delete
 	wal, err := NewWal(mockWalPath, mockWalInterval, mockWalBufferSize, 1)
 	assert.NoError(t, err)
 	defer wal.Stop()
 
-	entryMsg := &pb.WalEntry{
-		Entry: &pb.WalEntry_Set{
-			Set: &pb.SetRequest{Key: "direct-entry", Value: []byte("val"), Timestamp: 200},
-		},
-	}
-	err = wal.Publish("direct-entry", security.HashFunc("direct-entry"), entryMsg)
+	setVal := kv.Value{Data: []byte("val"), Timestamp: 200, NodeID: "n1"}
+	err = wal.Publish("direct-entry", security.HashFunc("direct-entry"), setVal)
 	assert.NoError(t, err)
 
-	// 3. Publish unsupported type
-	err = wal.Publish("key", security.HashFunc("key"), &pb.GetRequest{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported message type")
-
-	// 4. Publish pb.DeleteRequest and verify unwrap recycled pool wrappers
-	delMsg := &pb.DeleteRequest{Key: "direct-del", Timestamp: 250}
-	err = wal.Publish("direct-del", security.HashFunc("direct-del"), delMsg)
+	delVal := kv.Value{Timestamp: 250, NodeID: "n1", Tombstone: true}
+	err = wal.Publish("direct-del", security.HashFunc("direct-del"), delVal)
 	assert.NoError(t, err)
 
 	// Verify Replay on sets and deletes
@@ -277,11 +264,11 @@ func TestWal_ExtraEdgeCases(t *testing.T) {
 	assert.Equal(t, []byte("val"), replay["direct-entry"].Data)
 	assert.True(t, replay["direct-del"].Tombstone)
 
-	// 5. replaySegment unmarshal error by writing bad bytes to the log
+	// 3. replaySegment decode error by writing bad bytes to the log
 	wal.Stop() // stop sync so we can manually edit file safely
 	segPath := mockWalPath + "/seg_00.log"
 
-	// Corrupt the file by writing a invalid header and payload
+	// Corrupt the file by writing an invalid header and payload
 	// #nosec G304
 	f, err := os.OpenFile(segPath, os.O_WRONLY|os.O_APPEND, 0600)
 	require.NoError(t, err)
@@ -291,7 +278,7 @@ func TestWal_ExtraEdgeCases(t *testing.T) {
 	_, _ = f.Write([]byte("garbagedata"))
 	_ = f.Close()
 
-	// Replay should fail due to protobuf unmarshal error
+	// Replay should fail due to wal decode error
 	walReopen, err := NewWal(mockWalPath, mockWalInterval, mockWalBufferSize, 1)
 	assert.NoError(t, err)
 	defer walReopen.Stop()
@@ -309,11 +296,11 @@ func TestNopWal(t *testing.T) {
 	nopWal.Stop()
 
 	// Publish should accept set and delete requests without error or disk writing
-	setReq := &pb.SetRequest{Key: "key1", Value: []byte("val1"), Timestamp: 100}
-	assert.NoError(t, nopWal.Publish("key1", security.HashFunc("key1"), setReq))
+	setVal := kv.Value{Data: []byte("val1"), Timestamp: 100, NodeID: "n1"}
+	assert.NoError(t, nopWal.Publish("key1", security.HashFunc("key1"), setVal))
 
-	delReq := &pb.DeleteRequest{Key: "key1", Timestamp: 101}
-	assert.NoError(t, nopWal.Publish("key1", security.HashFunc("key1"), delReq))
+	delVal := kv.Value{Timestamp: 101, NodeID: "n1", Tombstone: true}
+	assert.NoError(t, nopWal.Publish("key1", security.HashFunc("key1"), delVal))
 
 	// Replay should return empty map
 	replay, err := nopWal.Replay()

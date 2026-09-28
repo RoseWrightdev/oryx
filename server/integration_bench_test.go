@@ -83,10 +83,11 @@ func BenchmarkClusterIntegration_ReadProxy(b *testing.B) {
 		_ = e1.Set(fmt.Sprintf("key-%d", i), []byte("value"))
 	}
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		// Node 2 proxies the read to Node 1
 		_, _ = e2.Get(kv.Key(fmt.Sprintf("key-%d", i%100)))
+		i++
 	}
 }

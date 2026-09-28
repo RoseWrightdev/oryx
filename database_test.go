@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	pb "github.com/rosewrightdev/oryx/api"
+	"github.com/rosewrightdev/oryx/cluster"
 	"github.com/rosewrightdev/oryx/cluster/entropy"
 	"github.com/rosewrightdev/oryx/cluster/gateway"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
@@ -54,7 +54,7 @@ func TestEnginePersistence(t *testing.T) {
 	assert.Nil(t, eng.Set(key1, val1))
 	assert.Nil(t, eng.Set(key2, val2))
 
-	coreEng := eng.(*singleNodeAdapter).Core()
+	coreEng := eng.Core()
 	err = coreEng.Snp().Create()
 	assert.Nil(t, err)
 
@@ -100,7 +100,7 @@ func TestEngine_DeletePersistence(t *testing.T) {
 func TestEngine_LWW(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e, _ := newDatabase(mockConfig)
-	eng := e.(*singleNodeAdapter).Core()
+	eng := e.Core()
 	eng.Start()
 	defer eng.Stop()
 
@@ -121,9 +121,8 @@ func TestEngine_LWW(t *testing.T) {
 	// Set with older timestamp (should be ignored)
 	ts3 := int64(1500)
 	// We call ApplySet directly to simulate a delayed gossip arrival
-	err := eng.ApplySet(&pb.SetRequest{
-		Key:       key,
-		Value:     []byte("delayed-old-value"),
+	err := eng.Put(key, kv.Value{
+		Data:      []byte("delayed-old-value"),
 		Timestamp: ts3,
 	})
 	assert.NoError(t, err)
@@ -134,7 +133,7 @@ func TestEngine_LWW(t *testing.T) {
 func TestEngine_TombstoneLWW(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e, _ := newDatabase(mockConfig)
-	eng := e.(*singleNodeAdapter).Core()
+	eng := e.Core()
 	eng.Start()
 	defer eng.Stop()
 
@@ -155,9 +154,8 @@ func TestEngine_TombstoneLWW(t *testing.T) {
 
 	// Late-arriving Set with older timestamp
 	ts3 := int64(1500)
-	err = eng.ApplySet(&pb.SetRequest{
-		Key:       key,
-		Value:     []byte("zombie"),
+	err = eng.Put(key, kv.Value{
+		Data:      []byte("zombie"),
 		Timestamp: ts3,
 	})
 	assert.NoError(t, err)
@@ -168,12 +166,12 @@ func TestEngine_TombstoneLWW(t *testing.T) {
 func TestEngine_SyncLogic(t *testing.T) {
 	defer cleanupEngineMocks(t)
 	e1, _ := newDatabase(mockConfig)
-	eng1 := e1.(*singleNodeAdapter).Core()
+	eng1 := e1.Core()
 	eng1.Start()
 	defer eng1.Stop()
 
 	e2, _ := newDatabase(mockConfig)
-	eng2 := e2.(*singleNodeAdapter).Core()
+	eng2 := e2.Core()
 	eng2.Start()
 	defer eng2.Stop()
 
@@ -190,7 +188,7 @@ func TestEngine_SyncLogic(t *testing.T) {
 
 	syncer1 := entropy.NewSyncer(&entropy.SyncerConfig{
 		NodeID:     mockConfig.meshConfig.NodeID,
-		Writer:     eng1.Writer(),
+		Writer:     cluster.NewStorageStateWriter(eng1),
 		Mesh:       &mesh.NopMesh{},
 		MeshConfig: &mockConfig.meshConfig,
 		Hm:         eng1.HM(),
@@ -213,7 +211,7 @@ func TestEngine_SyncLogic(t *testing.T) {
 	// 3. eng2 pushes the updates
 	syncer2 := entropy.NewSyncer(&entropy.SyncerConfig{
 		NodeID:     mockConfig.meshConfig.NodeID,
-		Writer:     eng2.Writer(),
+		Writer:     cluster.NewStorageStateWriter(eng2),
 		Mesh:       &mesh.NopMesh{},
 		MeshConfig: &mockConfig.meshConfig,
 		Hm:         eng2.HM(),

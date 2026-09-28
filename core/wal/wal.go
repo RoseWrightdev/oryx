@@ -11,14 +11,17 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/kv"
-	"google.golang.org/protobuf/proto"
+)
+
+const (
+	opSet    byte = 1
+	opDelete byte = 2
 )
 
 // Waler defines the interface for a durable write-ahead log.
 type Waler interface {
-	Publish(key kv.Key, hash kv.HashKey, msg proto.Message) error
+	Publish(key kv.Key, hash kv.HashKey, val kv.Value) error
 	Replay() (map[kv.Key]kv.Value, error)
 	Clear(offsets []int64) error
 	PrepareSnapshot() ([]int64, error)
@@ -59,8 +62,6 @@ func (s *walSegment) backgroundSync() {
 
 // Wal implements the durable Write-Ahead Log (WAL) partitioned into segment files.
 type Wal struct {
-	headerPool sync.Pool
-	entryPool  sync.Pool
 	bufferPool sync.Pool
 	segments   []*walSegment
 	count      int
@@ -75,17 +76,6 @@ func NewWal(dirPath string, syncInterval time.Duration, bufferSize uint32, segme
 	wal := &Wal{
 		segments: make([]*walSegment, segmentCount),
 		count:    segmentCount,
-		headerPool: sync.Pool{
-			New: func() any {
-				b := make([]byte, 4)
-				return &b
-			},
-		},
-		entryPool: sync.Pool{
-			New: func() any {
-				return &pb.WalEntry{}
-			},
-		},
 		bufferPool: sync.Pool{
 			New: func() any {
 				b := make([]byte, 0, 2048)
@@ -164,65 +154,56 @@ func (w *Wal) getSegment(hash kv.HashKey) *walSegment {
 }
 
 // Publish appends a write entry to the partition-segmented write-ahead log under proper segment locks.
-func (w *Wal) Publish(_ kv.Key, hash kv.HashKey, msg proto.Message) error {
-	entry := w.entryPool.Get().(*pb.WalEntry)
-	defer func() {
-		if wrapper, ok := entry.Entry.(*pb.WalEntry_Set); ok {
-			wrapper.Set = nil
-		} else if wrapper, ok := entry.Entry.(*pb.WalEntry_Delete); ok {
-			wrapper.Delete = nil
-		}
-		w.entryPool.Put(entry)
-	}()
+func (w *Wal) Publish(key kv.Key, hash kv.HashKey, val kv.Value) error {
+	keyLen := len(key)
+	nodeIDLen := len(val.NodeID)
 
-	switch m := msg.(type) {
-	case *pb.WalEntry:
-		entry.Entry = m.Entry
-	case *pb.SetRequest:
-		if wrapper, ok := entry.Entry.(*pb.WalEntry_Set); ok {
-			wrapper.Set = m
-		} else {
-			entry.Entry = &pb.WalEntry_Set{Set: m}
-		}
-	case *pb.DeleteRequest:
-		if wrapper, ok := entry.Entry.(*pb.WalEntry_Delete); ok {
-			wrapper.Delete = m
-		} else {
-			entry.Entry = &pb.WalEntry_Delete{Delete: m}
-		}
-	default:
-		return fmt.Errorf("unsupported message type: %T", msg)
+	dataLen := 0
+	op := opDelete
+	if !val.Tombstone {
+		op = opSet
+		dataLen = len(val.Data)
 	}
 
+	payloadLen := 1 + 8 + 2 + keyLen + 2 + nodeIDLen
+	if op == opSet {
+		payloadLen += 4 + dataLen
+	}
+
+	totalLen := 4 + payloadLen
 	bufPtr := w.bufferPool.Get().(*[]byte)
-	buf := (*bufPtr)[:0]
-	data, err := proto.MarshalOptions{}.MarshalAppend(buf, entry)
-	if err != nil {
-		w.bufferPool.Put(bufPtr)
-		return err
+	buf := *bufPtr
+	if cap(buf) < totalLen {
+		buf = make([]byte, totalLen)
+	} else {
+		buf = buf[:totalLen]
 	}
-	*bufPtr = data
+	*bufPtr = buf
 	defer w.bufferPool.Put(bufPtr)
 
-	headerPtr := w.headerPool.Get().(*[]byte)
-	header := *headerPtr
-	defer w.headerPool.Put(headerPtr)
-	dataLen := len(data)
-	// #nosec G115
-	dataLenU := uint32(dataLen)
-	binary.BigEndian.PutUint32(header, dataLenU)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(payloadLen))
+	buf[4] = op
+	binary.BigEndian.PutUint64(buf[5:13], uint64(val.Timestamp))
+	binary.BigEndian.PutUint16(buf[13:15], uint16(keyLen))
+	copy(buf[15:15+keyLen], key)
+
+	offset := 15 + keyLen
+	binary.BigEndian.PutUint16(buf[offset:offset+2], uint16(nodeIDLen))
+	offset += 2
+	copy(buf[offset:offset+nodeIDLen], val.NodeID)
+	offset += nodeIDLen
+
+	if op == opSet {
+		binary.BigEndian.PutUint32(buf[offset:offset+4], uint32(dataLen))
+		offset += 4
+		copy(buf[offset:offset+dataLen], val.Data)
+	}
 
 	seg := w.getSegment(hash)
 	seg.mu.Lock()
 	defer seg.mu.Unlock()
 
-	// Combine the 4-byte length header and the payload into a single write.
-	// Two separate writes risk leaving a partial header in the buffer if the
-	// second write fails, permanently corrupting the WAL framing (#96).
-	combined := make([]byte, 4+dataLen)
-	binary.BigEndian.PutUint32(combined[:4], dataLenU)
-	copy(combined[4:], data)
-	if _, err := seg.wrt.Write(combined); err != nil {
+	if _, err := seg.wrt.Write(buf); err != nil {
 		return err
 	}
 
@@ -264,9 +245,7 @@ func (w *Wal) replaySegment(seg *walSegment, results map[kv.Key]kv.Value, result
 	}
 
 	reader := bufio.NewReader(seg.file)
-	headerPtr := w.headerPool.Get().(*[]byte)
-	header := *headerPtr
-	defer w.headerPool.Put(headerPtr)
+	var header [4]byte
 
 	payloadPtr := w.bufferPool.Get().(*[]byte)
 	payload := *payloadPtr
@@ -276,14 +255,14 @@ func (w *Wal) replaySegment(seg *walSegment, results map[kv.Key]kv.Value, result
 	}()
 
 	for {
-		if _, err := io.ReadFull(reader, header); err != nil {
+		if _, err := io.ReadFull(reader, header[:]); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return err
 		}
 
-		size := int(binary.BigEndian.Uint32(header))
+		size := int(binary.BigEndian.Uint32(header[:]))
 		if cap(payload) < size {
 			payload = make([]byte, size)
 		}
@@ -302,43 +281,59 @@ func (w *Wal) replaySegment(seg *walSegment, results map[kv.Key]kv.Value, result
 }
 
 func (w *Wal) setResults(payload []byte, results map[kv.Key]kv.Value, resultsMu *sync.Mutex) error {
-	entry := w.entryPool.Get().(*pb.WalEntry)
-	entry.Reset()
-	if err := proto.Unmarshal(payload, entry); err != nil {
-		w.entryPool.Put(entry)
-		return err
+	if len(payload) < 13 {
+		return fmt.Errorf("corrupt wal entry: payload too short (%d bytes)", len(payload))
 	}
 
+	op := payload[0]
+	ts := int64(binary.BigEndian.Uint64(payload[1:9]))
+	keyLen := int(binary.BigEndian.Uint16(payload[9:11]))
+	if len(payload) < 11+keyLen+2 {
+		return fmt.Errorf("corrupt wal entry: truncated key")
+	}
+	key := kv.Key(payload[11 : 11+keyLen])
+
+	offset := 11 + keyLen
+	nodeIDLen := int(binary.BigEndian.Uint16(payload[offset : offset+2]))
+	offset += 2
+	if len(payload) < offset+nodeIDLen {
+		return fmt.Errorf("corrupt wal entry: truncated nodeID")
+	}
+	nodeID := string(payload[offset : offset+nodeIDLen])
+	offset += nodeIDLen
+
 	resultsMu.Lock()
-	switch op := entry.Entry.(type) {
-	case *pb.WalEntry_Set:
-		k := kv.Key(op.Set.Key)
-		existing, exists := results[k]
-		if !exists || op.Set.Timestamp > existing.Timestamp {
-			// Clone op.Set.Value: it points into the reusable payload buffer
-			// which is overwritten on the next iteration, corrupting any
-			// kv.Value.Data slice that aliases it (#60).
-			valCopy := make([]byte, len(op.Set.Value))
-			copy(valCopy, op.Set.Value)
-			results[k] = kv.Value{
+	existing, exists := results[key]
+	if !exists || ts > existing.Timestamp {
+		switch op {
+		case opSet:
+			if len(payload) < offset+4 {
+				resultsMu.Unlock()
+				return fmt.Errorf("corrupt wal entry: truncated data length")
+			}
+			dataLen := int(binary.BigEndian.Uint32(payload[offset : offset+4]))
+			offset += 4
+			if len(payload) < offset+dataLen {
+				resultsMu.Unlock()
+				return fmt.Errorf("corrupt wal entry: truncated data payload")
+			}
+			valCopy := make([]byte, dataLen)
+			copy(valCopy, payload[offset:offset+dataLen])
+			results[key] = kv.Value{
 				Data:      valCopy,
-				Timestamp: op.Set.Timestamp,
+				Timestamp: ts,
+				NodeID:    nodeID,
 				Tombstone: false,
 			}
-		}
-	case *pb.WalEntry_Delete:
-		k := kv.Key(op.Delete.Key)
-		existing, exists := results[k]
-		if !exists || op.Delete.Timestamp > existing.Timestamp {
-			results[k] = kv.Value{
-				Timestamp: op.Delete.Timestamp,
+		case opDelete:
+			results[key] = kv.Value{
+				Timestamp: ts,
+				NodeID:    nodeID,
 				Tombstone: true,
 			}
 		}
 	}
 	resultsMu.Unlock()
-
-	w.entryPool.Put(entry)
 	return nil
 }
 
@@ -461,9 +456,9 @@ type NopWal struct{}
 // NewNopWal creates a new zero-disk-write Waler instance.
 func NewNopWal() Waler { return &NopWal{} }
 
-func (n *NopWal) Publish(_ kv.Key, _ kv.HashKey, _ proto.Message) error { return nil }
-func (n *NopWal) Replay() (map[kv.Key]kv.Value, error)                  { return make(map[kv.Key]kv.Value), nil }
-func (n *NopWal) Clear(_ []int64) error                                 { return nil }
-func (n *NopWal) PrepareSnapshot() ([]int64, error)                     { return nil, nil }
-func (n *NopWal) Start()                                                {}
-func (n *NopWal) Stop()                                                 {}
+func (n *NopWal) Publish(_ kv.Key, _ kv.HashKey, _ kv.Value) error { return nil }
+func (n *NopWal) Replay() (map[kv.Key]kv.Value, error)             { return make(map[kv.Key]kv.Value), nil }
+func (n *NopWal) Clear(_ []int64) error                            { return nil }
+func (n *NopWal) PrepareSnapshot() ([]int64, error)                { return nil, nil }
+func (n *NopWal) Start()                                           {}
+func (n *NopWal) Stop()                                            {}

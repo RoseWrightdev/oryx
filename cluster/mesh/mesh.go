@@ -28,7 +28,6 @@ type Mesher interface {
 	Members() []PeerAddress
 	Owner(key kv.Key) kv.NodeID
 	GetOwners(key kv.Key, n int) []kv.NodeID
-	PutOwners(owners []kv.NodeID)
 	AddressForNode(nodeID kv.NodeID) PeerAddress
 	Start() error
 	Stop() error
@@ -119,7 +118,6 @@ func NewMesh(gossip Gossiper, config Config) (*Mesh, error) {
 		mlConfig.AdvertiseAddr = config.AdvertiseAddr
 	}
 
-	mlConfig.Events = m
 	ml, err := memberlist.Create(mlConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create memberlist: %w", err)
@@ -174,11 +172,6 @@ func (m *Mesh) Owner(key kv.Key) kv.NodeID {
 // GetOwners returns the N closest NodeIDs on the hash ring responsible for replicating the given key.
 func (m *Mesh) GetOwners(key kv.Key, n int) []kv.NodeID {
 	return m.ring.GetOwners(key, n)
-}
-
-// PutOwners returns a slice of NodeIDs back to the ring's slice pool for recycling.
-func (m *Mesh) PutOwners(owners []kv.NodeID) {
-	m.ring.PutOwners(owners)
 }
 
 // UpdateLocalWeight updates the weight of the local node and triggers cluster-wide gossip.
@@ -353,11 +346,6 @@ func (n *NopMesh) Owner(kv.Key) kv.NodeID { return "" }
 
 // GetOwners returns nil as there are no owners in a NopMesh.
 func (n *NopMesh) GetOwners(kv.Key, int) []kv.NodeID { return nil }
-
-// PutOwners does nothing in a NopMesh.
-func (n *NopMesh) PutOwners([]kv.NodeID) {
-	_ = n
-}
 
 // AddressForNode returns an empty PeerAddress in NopMesh.
 func (n *NopMesh) AddressForNode(kv.NodeID) PeerAddress { return "" }

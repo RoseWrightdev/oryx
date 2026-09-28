@@ -15,9 +15,10 @@ func BenchmarkLRU_Seen(b *testing.B) {
 	lru.Start()
 	defer lru.Stop()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		lru.seen(fmt.Sprintf("key-%d", i%10000), uint64(i))
+		i++
 	}
 }

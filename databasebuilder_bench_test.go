@@ -4,7 +4,7 @@ import "testing"
 
 func BenchmarkDatabaseBuilder_Build(b *testing.B) {
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		builder := NewDatabaseBuilder().
 			Default().
 			SingleNode().

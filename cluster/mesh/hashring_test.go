@@ -144,22 +144,6 @@ func TestHashRing_AddNodes(t *testing.T) {
 	})
 }
 
-func TestHashRing_PutOwners(t *testing.T) {
-	ring := NewHashRing()
-	ring.AddNode("node1")
-	ring.AddNode("node2")
-
-	owners := ring.GetOwners("test-key", 2)
-	assert.Len(t, owners, 2)
-
-	// PutOwners is a no-op; calling it should not panic or corrupt the ring
-	ring.PutOwners(owners)
-	ring.PutOwners(nil)
-
-	// Ring still works after PutOwners
-	owner := ring.GetNode("test-key")
-	assert.NotEmpty(t, owner)
-}
 
 func TestHashRing_ExtraEdgeCases(t *testing.T) {
 	ring := NewHashRing()

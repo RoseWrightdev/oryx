@@ -3,7 +3,6 @@ package cluster
 import (
 	"testing"
 
-	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/cluster/gateway"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
 	"github.com/rosewrightdev/oryx/core/clock"
@@ -11,9 +10,7 @@ import (
 	"github.com/rosewrightdev/oryx/core/hashmap"
 	"github.com/rosewrightdev/oryx/core/snap"
 	"github.com/rosewrightdev/oryx/core/wal"
-	"github.com/rosewrightdev/oryx/core/writer"
 	"github.com/rosewrightdev/oryx/kv"
-	"github.com/rosewrightdev/oryx/security"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -38,24 +35,32 @@ type fakeEngine struct {
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{hm: hashmap.NewShardedMap(), evt: &fakeEvictor{}}
+	return &fakeEngine{
+		hm:  hashmap.NewShardedMap(),
+		evt: &fakeEvictor{},
+	}
 }
 
-func (f *fakeEngine) Get(kv.Key) ([]byte, bool)           { return nil, false }
-func (f *fakeEngine) Set(kv.Key, []byte) error            { return nil }
-func (f *fakeEngine) Delete(kv.Key) (bool, error)         { return false, nil }
-func (f *fakeEngine) Start()                              {}
-func (f *fakeEngine) Stop()                               {}
-func (f *fakeEngine) ApplySet(*pb.SetRequest) error       { return nil }
-func (f *fakeEngine) ApplyDelete(*pb.DeleteRequest) error { return nil }
-func (f *fakeEngine) HM() *hashmap.ShardedMap             { return f.hm }
-func (f *fakeEngine) Wal() wal.Waler                      { return nil }
-func (f *fakeEngine) Clock() clock.Clocker                { return nil }
-func (f *fakeEngine) Writer() *writer.StorageWriter       { return nil }
-func (f *fakeEngine) Snp() *snap.Snapshotter              { return nil }
-func (f *fakeEngine) Evt() evict.Evictor                  { return f.evt }
-func (f *fakeEngine) Evict(kv.Key, evict.Reason) error    { return nil }
-func (f *fakeEngine) Occupancy() float64                  { return 0 }
+func (f *fakeEngine) Get(key kv.Key) ([]byte, bool) {
+	val, ok := f.hm.Get(key)
+	if ok && f.evt != nil {
+		f.evt.Publish(key, 0)
+	}
+	return val, ok
+}
+func (f *fakeEngine) Set(kv.Key, []byte) error         { return nil }
+func (f *fakeEngine) Put(kv.Key, kv.Value) error       { return nil }
+func (f *fakeEngine) Delete(kv.Key) (bool, error)      { return false, nil }
+func (f *fakeEngine) Exists(kv.Key) bool               { return false }
+func (f *fakeEngine) Start()                           {}
+func (f *fakeEngine) Stop()                            {}
+func (f *fakeEngine) HM() *hashmap.ShardedMap          { return f.hm }
+func (f *fakeEngine) Wal() wal.Waler                   { return nil }
+func (f *fakeEngine) Clock() clock.Clocker             { return nil }
+func (f *fakeEngine) Snp() *snap.Snapshotter           { return nil }
+func (f *fakeEngine) Evt() evict.Evictor               { return f.evt }
+func (f *fakeEngine) Evict(kv.Key, evict.Reason) error { return nil }
+func (f *fakeEngine) Occupancy() float64               { return 0 }
 
 // nodeMockMesher is a minimal mesh.Mesher whose owner set is directly
 // controllable, to exercise isOwner's true/false branches.
@@ -65,7 +70,6 @@ type nodeMockMesher struct {
 }
 
 func (m *nodeMockMesher) GetOwners(kv.Key, int) []kv.NodeID { return m.owners }
-func (m *nodeMockMesher) PutOwners([]kv.NodeID)             {}
 
 func newTestNode(t *testing.T, eng *fakeEngine, meshObj mesh.Mesher, nodeID kv.NodeID) *Node {
 	t.Helper()
@@ -83,8 +87,7 @@ func newTestNode(t *testing.T, eng *fakeEngine, meshObj mesh.Mesher, nodeID kv.N
 func TestNode_Get_SingleNodePublishesEvictionTelemetry(t *testing.T) {
 	eng := newFakeEngine()
 	key := kv.Key("hot-key")
-	hash := security.HashFunc(key)
-	eng.hm.Store(key, hash, kv.Value{Data: []byte("val")})
+	eng.hm.Put(key, kv.Value{Data: []byte("val")})
 
 	n := newTestNode(t, eng, &mesh.NopMesh{}, "solo")
 	n.meshConfig.SingleNode = true
@@ -104,8 +107,7 @@ func TestNode_Get_SingleNodePublishesEvictionTelemetry(t *testing.T) {
 func TestNode_Get_DistributedServesLocalWhenOwner(t *testing.T) {
 	eng := newFakeEngine()
 	key := kv.Key("owned-key")
-	hash := security.HashFunc(key)
-	eng.hm.Store(key, hash, kv.Value{Data: []byte("val")})
+	eng.hm.Put(key, kv.Value{Data: []byte("val")})
 
 	n := newTestNode(t, eng, &nodeMockMesher{owners: []kv.NodeID{"self"}}, "self")
 
@@ -120,8 +122,7 @@ func TestNode_Get_DistributedServesLocalWhenOwner(t *testing.T) {
 func TestNode_Get_DistributedSkipsStaleLocalCopyWhenNotOwner(t *testing.T) {
 	eng := newFakeEngine()
 	key := kv.Key("rebalanced-away-key")
-	hash := security.HashFunc(key)
-	eng.hm.Store(key, hash, kv.Value{Data: []byte("stale-local-value")})
+	eng.hm.Put(key, kv.Value{Data: []byte("stale-local-value")})
 
 	// "other" now owns this key; "self" is no longer in the owner set.
 	n := newTestNode(t, eng, &nodeMockMesher{owners: []kv.NodeID{"other"}}, "self")
@@ -136,8 +137,7 @@ func TestNode_Get_DistributedSkipsStaleLocalCopyWhenNotOwner(t *testing.T) {
 func TestNode_Get_DistributedTombstoneOnlyAuthoritativeWhenOwner(t *testing.T) {
 	eng := newFakeEngine()
 	key := kv.Key("stale-tombstone-key")
-	hash := security.HashFunc(key)
-	eng.hm.Store(key, hash, kv.Value{Tombstone: true})
+	eng.hm.Put(key, kv.Value{Tombstone: true})
 
 	nOwner := newTestNode(t, eng, &nodeMockMesher{owners: []kv.NodeID{"self"}}, "self")
 	_, ok := nOwner.Get(key)
@@ -153,8 +153,7 @@ func TestNode_Get_DistributedTombstoneOnlyAuthoritativeWhenOwner(t *testing.T) {
 func BenchmarkNode_Get_DistributedOwner(b *testing.B) {
 	eng := newFakeEngine()
 	key := kv.Key("bench-key")
-	hash := security.HashFunc(key)
-	eng.hm.Store(key, hash, kv.Value{Data: []byte("val")})
+	eng.hm.Put(key, kv.Value{Data: []byte("val")})
 
 	n := &Node{
 		core:       eng,

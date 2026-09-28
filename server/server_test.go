@@ -7,6 +7,7 @@ import (
 	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/cluster/entropy"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
+	"github.com/rosewrightdev/oryx/core"
 	"github.com/rosewrightdev/oryx/core/hashmap"
 	"github.com/rosewrightdev/oryx/kv"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,10 @@ import (
 
 type mockDatabase struct {
 	mock.Mock
+}
+
+func (m *mockDatabase) Core() core.Engine {
+	return nil
 }
 
 func (m *mockDatabase) Creds() credentials.TransportCredentials {
