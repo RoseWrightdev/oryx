@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rosewrightdev/oryx/cluster/mesh"
 	"github.com/rosewrightdev/oryx/core/clock"
 	"github.com/rosewrightdev/oryx/core/evict"
-	"github.com/rosewrightdev/oryx/cluster/mesh"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -42,4 +42,3 @@ func cleanupEngineMocks(t *testing.T) {
 		assert.Nil(t, err)
 	}
 }
-

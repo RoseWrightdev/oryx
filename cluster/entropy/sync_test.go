@@ -11,7 +11,6 @@ import (
 	"github.com/rosewrightdev/oryx/cluster/mesh"
 	"github.com/rosewrightdev/oryx/core/hashmap"
 	"github.com/rosewrightdev/oryx/kv"
-	"github.com/rosewrightdev/oryx/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +41,7 @@ func TestSync_PreparePullRequestDataRace(_ *testing.T) {
 				return
 			default:
 				key := fmt.Sprintf("racekey-%d", i)
-				hm.StoreLWW(key, security.HashFunc(key), kv.Value{Data: []byte("val"), Timestamp: time.Now().UnixNano()})
+				hm.PutLWW(key, kv.Value{Data: []byte("val"), Timestamp: time.Now().UnixNano()})
 				m := syn.pools.bucketMaps.Get().(map[hashmap.ShardID]hashmap.ShardDigest)
 				hm.FillDigests(m)
 				syn.pools.bucketMaps.Put(m)
@@ -80,7 +79,7 @@ func (m *mockStateTransferWriter) ApplySet(req *pb.SetRequest) error {
 		return m.setErr
 	}
 	if m.hm != nil {
-		m.hm.StoreLWW(req.Key, security.HashFunc(req.Key), kv.Value{Data: req.Value, Timestamp: req.Timestamp})
+		m.hm.PutLWW(req.Key, kv.Value{Data: req.Value, Timestamp: req.Timestamp})
 	}
 	return nil
 }
@@ -90,7 +89,7 @@ func (m *mockStateTransferWriter) ApplyDelete(req *pb.DeleteRequest) error {
 		return m.deleteErr
 	}
 	if m.hm != nil {
-		m.hm.StoreLWW(req.Key, security.HashFunc(req.Key), kv.Value{Timestamp: req.Timestamp, Tombstone: true})
+		m.hm.PutLWW(req.Key, kv.Value{Timestamp: req.Timestamp, Tombstone: true})
 	}
 	return nil
 }
@@ -162,7 +161,7 @@ func TestSyncer_ExtraEdgeCases(t *testing.T) {
 
 	// 7. buildDeleteRequest coverage!
 	// Populate map with a delete entry
-	hm.StoreLWW("user:deleted", security.HashFunc("user:deleted"), kv.Value{Timestamp: 500, Tombstone: true})
+	hm.PutLWW("user:deleted", kv.Value{Timestamp: 500, Tombstone: true})
 	synDel := NewSyncer(&SyncerConfig{
 		Mesh:       &MockMesher{Owners: []kv.NodeID{"node-1"}},
 		Cc:         cc,
@@ -230,8 +229,8 @@ func (m *MockMesher) LocalGossipPort() int { return 0 }
 // for Pull's results: they're gRPC response payload nothing ever Puts back (#66).
 func TestSyncer_PullResultsAreIndependent(t *testing.T) {
 	hm := hashmap.NewShardedMap()
-	hm.StoreLWW("key-a", security.HashFunc("key-a"), kv.Value{Data: []byte("val-a"), Timestamp: 1})
-	hm.StoreLWW("key-b", security.HashFunc("key-b"), kv.Value{Data: []byte("val-b"), Timestamp: 1})
+	hm.PutLWW("key-a", kv.Value{Data: []byte("val-a"), Timestamp: 1})
+	hm.PutLWW("key-b", kv.Value{Data: []byte("val-b"), Timestamp: 1})
 
 	syn := NewSyncer(&SyncerConfig{
 		Mesh:       &MockMesher{Owners: []kv.NodeID{"node-1"}},

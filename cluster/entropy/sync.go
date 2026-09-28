@@ -14,15 +14,20 @@ import (
 	"github.com/rosewrightdev/oryx/cluster/gateway"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
 	"github.com/rosewrightdev/oryx/core/hashmap"
-	"github.com/rosewrightdev/oryx/core/writer"
 	"github.com/rosewrightdev/oryx/kv"
 	"google.golang.org/grpc/credentials"
 )
 
+// StateWriter defines the interface for applying sets and deletes to the state.
+type StateWriter interface {
+	ApplySet(req *pb.SetRequest) error
+	ApplyDelete(req *pb.DeleteRequest) error
+}
+
 // Syncer performs periodic state reconciliation between nodes.
 // It detects divergence in storage shards and pulls missing data from peers.
 type Syncer struct {
-	writer     writer.StateWriter
+	writer     StateWriter
 	mesh       mesh.Mesher
 	creds      credentials.TransportCredentials
 	meshConfig *mesh.Config
@@ -37,7 +42,7 @@ type Syncer struct {
 
 // SyncerConfig holds configuration options for the Syncer service.
 type SyncerConfig struct {
-	Writer     writer.StateWriter
+	Writer     StateWriter
 	Mesh       mesh.Mesher
 	Creds      credentials.TransportCredentials
 	MeshConfig *mesh.Config

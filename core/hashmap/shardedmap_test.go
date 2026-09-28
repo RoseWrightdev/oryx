@@ -7,24 +7,23 @@ import (
 	"time"
 
 	"github.com/rosewrightdev/oryx/kv"
-	"github.com/rosewrightdev/oryx/security"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestShardedMap_Basic(t *testing.T) {
 	sm := NewShardedMap()
 
-	key, hash := "test", security.HashFunc("test")
+	key := "test"
 	val := kv.Value{Data: []byte("val"), Timestamp: 123}
 
-	sm.Store(key, hash, val)
+	sm.Put(key, val)
 
-	got, ok := sm.Load(key, hash)
+	got, ok := sm.GetRecord(key)
 	assert.True(t, ok)
 	assert.Equal(t, val, got)
 
-	sm.Delete(key, hash)
-	val, ok = sm.Load(key, hash)
+	sm.Delete(key)
+	val, ok = sm.GetRecord(key)
 	assert.Nil(t, val.Data)
 	assert.False(t, ok)
 }
@@ -33,8 +32,8 @@ func TestShardedMap_Digests(t *testing.T) {
 	sm := NewShardedMap()
 
 	// Ensure we put things in different shards by manually picking hashes
-	sm.Store("a", 0, kv.Value{Timestamp: 1})
-	sm.Store("b", 1, kv.Value{Timestamp: 1})
+	sm.store("a", 0, kv.Value{Timestamp: 1})
+	sm.store("b", 1, kv.Value{Timestamp: 1})
 
 	digests := make(map[ShardID]ShardDigest)
 	for i := range ShardCount {
@@ -98,18 +97,18 @@ func TestShardedMap_CountTrackingReturnsToEmpty(t *testing.T) {
 	sm.FillDigests(digests)
 	emptyFingerprint := digests[0][0]
 
-	sm.Store(key, hash, kv.Value{Data: []byte("v1"), Timestamp: 1})
+	sm.store(key, hash, kv.Value{Data: []byte("v1"), Timestamp: 1})
 	sm.FillDigests(digests)
 	afterInsert := digests[0][0]
 	assert.NotEqual(t, emptyFingerprint, afterInsert)
 
 	// An in-place update (same key, still present) must not change the count.
-	sm.Store(key, hash, kv.Value{Data: []byte("v2"), Timestamp: 2})
+	sm.store(key, hash, kv.Value{Data: []byte("v2"), Timestamp: 2})
 	sm.FillDigests(digests)
 	assert.NotEqual(t, afterInsert, digests[0][0], "digest should change with the value")
 	assert.NotEqual(t, emptyFingerprint, digests[0][0], "count-derived component must be unchanged by an update")
 
-	sm.Delete(key, hash)
+	sm.deleteKey(key, hash)
 	sm.FillDigests(digests)
 	assert.Equal(t, emptyFingerprint, digests[0][0], "deleting the only key must return to the empty fingerprint")
 }
@@ -129,8 +128,7 @@ func TestShardedMap_Concurrency(t *testing.T) {
 			defer wg.Done()
 			for k := range keys {
 				key := fmt.Sprintf("k-%d", k)
-				h := security.HashFunc(key)
-				sm.Store(key, h, kv.Value{Timestamp: int64(id)})
+				sm.Put(key, kv.Value{Timestamp: int64(id)})
 			}
 		}(i)
 	}
@@ -139,8 +137,7 @@ func TestShardedMap_Concurrency(t *testing.T) {
 
 	// Check random key
 	key := "k-50"
-	h := security.HashFunc(key)
-	v, ok := sm.Load(key, h)
+	v, ok := sm.GetRecord(key)
 	assert.True(t, ok)
 	assert.GreaterOrEqual(t, v.Timestamp, int64(0))
 }
@@ -148,18 +145,17 @@ func TestShardedMap_Concurrency(t *testing.T) {
 // TestShardedMap_StoreLWWSameNodeSameTimestamp covers the LWW tie that arises
 // when two writes carry both the same timestamp and the same NodeID — rapid
 // consecutive writes from one node, or a client that supplies its own
-// timestamp. The old rule rejected every such write, so the second one was
-// silently dropped no matter which order the pair arrived in.
+// timestamp.
 func TestShardedMap_StoreLWWSameNodeSameTimestamp(t *testing.T) {
-	key, hash := "same-node", security.HashFunc("same-node")
+	key := "same-node"
 	first := kv.Value{Data: []byte("first"), Timestamp: 100, NodeID: "node-1"}
 	second := kv.Value{Data: []byte("second"), Timestamp: 100, NodeID: "node-1"}
 
 	apply := func(a, b kv.Value) (accepted bool, final kv.Value) {
 		sm := NewShardedMap()
-		sm.StoreLWW(key, hash, a)
-		accepted = sm.StoreLWW(key, hash, b)
-		final, _ = sm.Load(key, hash)
+		sm.PutLWW(key, a)
+		accepted = sm.PutLWW(key, b)
+		final, _ = sm.GetRecord(key)
 		return accepted, final
 	}
 
@@ -176,16 +172,16 @@ func TestShardedMap_StoreLWWSameNodeSameTimestamp(t *testing.T) {
 
 	// Re-applying a byte-identical write is a genuine no-op.
 	sm := NewShardedMap()
-	assert.True(t, sm.StoreLWW(key, hash, first))
+	assert.True(t, sm.PutLWW(key, first))
 	before := sm.RootDigest()
-	assert.False(t, sm.StoreLWW(key, hash, first))
+	assert.False(t, sm.PutLWW(key, first))
 	assert.Equal(t, before, sm.RootDigest())
 
 	// Ordinary LWW ordering is untouched.
-	assert.False(t, sm.StoreLWW(key, hash, kv.Value{Data: []byte("older"), Timestamp: 99, NodeID: "node-1"}))
-	assert.True(t, sm.StoreLWW(key, hash, kv.Value{Data: []byte("newer"), Timestamp: 101, NodeID: "node-1"}))
-	assert.False(t, sm.StoreLWW(key, hash, kv.Value{Data: []byte("lower-node"), Timestamp: 101, NodeID: "node-0"}))
-	assert.True(t, sm.StoreLWW(key, hash, kv.Value{Data: []byte("higher-node"), Timestamp: 101, NodeID: "node-2"}))
+	assert.False(t, sm.PutLWW(key, kv.Value{Data: []byte("older"), Timestamp: 99, NodeID: "node-1"}))
+	assert.True(t, sm.PutLWW(key, kv.Value{Data: []byte("newer"), Timestamp: 101, NodeID: "node-1"}))
+	assert.False(t, sm.PutLWW(key, kv.Value{Data: []byte("lower-node"), Timestamp: 101, NodeID: "node-0"}))
+	assert.True(t, sm.PutLWW(key, kv.Value{Data: []byte("higher-node"), Timestamp: 101, NodeID: "node-2"}))
 }
 
 // TestShardedMap_FillDigestsAllocatesDestination pins that a caller handing in
@@ -193,7 +189,7 @@ func TestShardedMap_StoreLWWSameNodeSameTimestamp(t *testing.T) {
 // so the previous implementation returned an empty map without any error.
 func TestShardedMap_FillDigestsAllocatesDestination(t *testing.T) {
 	sm := NewShardedMap()
-	sm.Store("a", 0, kv.Value{Timestamp: 1})
+	sm.store("a", 0, kv.Value{Timestamp: 1})
 
 	dst := make(map[ShardID]ShardDigest)
 	sm.FillDigests(dst)
@@ -225,12 +221,9 @@ func TestShardedMap_FillDigestsAllocatesDestination(t *testing.T) {
 func TestShardedMap_RangeDoesNotBlockWriters(t *testing.T) {
 	sm := NewShardedMap()
 
-	hashes := make(map[kv.Key]kv.HashKey, 256)
 	for i := range 256 {
 		key := kv.Key(fmt.Sprintf("range-key-%d", i))
-		hash := security.HashFunc(key)
-		hashes[key] = hash
-		sm.Store(key, hash, kv.Value{Data: []byte("v"), Timestamp: 1, NodeID: "node-1"})
+		sm.Put(key, kv.Value{Data: []byte("v"), Timestamp: 1, NodeID: "node-1"})
 	}
 
 	var once sync.Once
@@ -242,7 +235,7 @@ func TestShardedMap_RangeDoesNotBlockWriters(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				sm.Store(key, hashes[key], kv.Value{Data: []byte("written-during-range"), Timestamp: 2, NodeID: "node-1"})
+				sm.Put(key, kv.Value{Data: []byte("written-during-range"), Timestamp: 2, NodeID: "node-1"})
 			}()
 
 			select {
@@ -262,7 +255,7 @@ func TestShardedMap_RangeDoesNotBlockWriters(t *testing.T) {
 		seen++
 		return true
 	})
-	assert.Equal(t, len(hashes), seen)
+	assert.Equal(t, 256, seen)
 
 	// Early termination still works.
 	seen = 0

@@ -10,7 +10,6 @@ import (
 	"github.com/rosewrightdev/oryx/kv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -27,7 +26,7 @@ type mockWal struct {
 	clearCalled bool
 }
 
-func (mw *mockWal) Publish(_ kv.Key, _ kv.HashKey, _ proto.Message) error { return nil }
+func (mw *mockWal) Publish(_ kv.Key, _ kv.HashKey, _ kv.Value) error { return nil }
 func (mw *mockWal) Replay() (map[kv.Key]kv.Value, error)                  { return nil, nil }
 func (mw *mockWal) Clear(_ []int64) error                                 { mw.clearCalled = true; return nil }
 func (mw *mockWal) PrepareSnapshot() ([]int64, error)                     { return nil, nil }

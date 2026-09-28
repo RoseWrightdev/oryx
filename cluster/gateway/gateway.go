@@ -8,12 +8,17 @@ import (
 
 	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
-	"github.com/rosewrightdev/oryx/core/writer"
 	"github.com/rosewrightdev/oryx/kv"
 	"google.golang.org/grpc/credentials"
 )
 
-// existenceChecker is optionally implemented by a writer.StateWriter that can
+// StateWriter defines the interface for applying sets and deletes to the state.
+type StateWriter interface {
+	ApplySet(req *pb.SetRequest) error
+	ApplyDelete(req *pb.DeleteRequest) error
+}
+
+// existenceChecker is optionally implemented by a StateWriter that can
 // report whether a key currently holds a live value in local storage. It lets
 // the gateway answer DEL with an accurate "did it exist" result without paying
 // for a remote round trip when this node is one of the key's owners.
@@ -32,7 +37,7 @@ type Gateway struct {
 	// finishes bootstrapping. Requests can arrive on the RESP/gRPC listeners
 	// before that happens, so every read goes through stateWriter().
 	swMu sync.RWMutex
-	sw   writer.StateWriter
+	sw   StateWriter
 
 	setRequests    sync.Pool
 	deleteRequests sync.Pool
@@ -54,7 +59,7 @@ func NewGateway(meshObj mesh.Mesher, meshConfig *mesh.Config, creds credentials.
 }
 
 // SetStateWriter registers the local state writer for processing local replicas.
-func (g *Gateway) SetStateWriter(sw writer.StateWriter) {
+func (g *Gateway) SetStateWriter(sw StateWriter) {
 	g.swMu.Lock()
 	g.sw = sw
 	g.swMu.Unlock()
@@ -64,7 +69,7 @@ func (g *Gateway) SetStateWriter(sw writer.StateWriter) {
 // engine has not finished bootstrapping yet. Callers must not dereference the
 // result without checking the error: before SetStateWriter runs, sw is nil and
 // calling through it would panic.
-func (g *Gateway) stateWriter() (writer.StateWriter, error) {
+func (g *Gateway) stateWriter() (StateWriter, error) {
 	g.swMu.RLock()
 	sw := g.sw
 	g.swMu.RUnlock()

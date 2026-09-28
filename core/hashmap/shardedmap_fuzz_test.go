@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/rosewrightdev/oryx/kv"
-	"github.com/rosewrightdev/oryx/security"
 )
 
 func FuzzStoreLWWConvergence(f *testing.F) {
@@ -21,7 +20,6 @@ func FuzzStoreLWWConvergence(f *testing.F) {
 		}
 
 		key := kv.Key(keyStr)
-		hash := security.HashFunc(key)
 		val := kv.Value{
 			Data:      valBytes,
 			Timestamp: ts,
@@ -39,9 +37,9 @@ func FuzzStoreLWWConvergence(f *testing.F) {
 		}()
 
 		// Apply to sm1
-		sm1.StoreLWW(key, hash, val)
+		sm1.PutLWW(key, val)
 		// Apply same mutation to sm2
-		sm2.StoreLWW(key, hash, val)
+		sm2.PutLWW(key, val)
 
 		// Assert RootDigests are equal after identical state updates
 		if sm1.RootDigest() != sm2.RootDigest() {
@@ -65,15 +63,14 @@ func FuzzShardedMapRandomOps(f *testing.F) {
 		// Execute synthetic operation stream
 		for i := 0; i < len(opsScript); i += 10 {
 			key := kv.Key(fmt.Sprintf("k%d", i%16))
-			hash := security.HashFunc(key)
 			val := kv.Value{
 				Data:      opsScript[i:],
 				Timestamp: int64(i * 100),
 				NodeID:    fmt.Sprintf("node-%d", i%4),
 				Tombstone: i%3 == 0,
 			}
-			_ = sm.StoreLWW(key, hash, val)
-			_, _ = sm.Load(key, hash)
+			_ = sm.PutLWW(key, val)
+			_, _ = sm.Get(key)
 		}
 	})
 }

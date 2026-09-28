@@ -116,15 +116,15 @@ flowchart TD
         subgraph Replication[Incoming Replication]
             Gossip["Gossip Handler\n(UDP, receive-only)"]
             Syncer[Anti-Entropy Syncer]
-            Writer[StorageWriter]
+            Writer[StorageStateWriter]
         end
 
         Engine -->|"Set / Delete"| Gateway
         Gateway -->|GetOwners| Ring
         Gateway -->|"Local replica"| Writer
-        Writer -->|Last Write Wins| ShardedMap
-
-        Writer --> WAL
+        Writer -->|"Put (LWW)"| Engine
+        Engine -->|Last Write Wins| ShardedMap
+        Engine --> WAL
         Engine -->|"Local lookup"| ShardedMap
 
         Gossip -->|ApplySet / ApplyDelete| Writer

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	pb "github.com/rosewrightdev/oryx/api"
+	"github.com/rosewrightdev/oryx/cluster"
 	"github.com/rosewrightdev/oryx/cluster/entropy"
 	"github.com/rosewrightdev/oryx/cluster/gateway"
 	"github.com/rosewrightdev/oryx/cluster/mesh"
@@ -121,9 +121,8 @@ func TestEngine_LWW(t *testing.T) {
 	// Set with older timestamp (should be ignored)
 	ts3 := int64(1500)
 	// We call ApplySet directly to simulate a delayed gossip arrival
-	err := eng.ApplySet(&pb.SetRequest{
-		Key:       key,
-		Value:     []byte("delayed-old-value"),
+	err := eng.Put(key, kv.Value{
+		Data:      []byte("delayed-old-value"),
 		Timestamp: ts3,
 	})
 	assert.NoError(t, err)
@@ -155,9 +154,8 @@ func TestEngine_TombstoneLWW(t *testing.T) {
 
 	// Late-arriving Set with older timestamp
 	ts3 := int64(1500)
-	err = eng.ApplySet(&pb.SetRequest{
-		Key:       key,
-		Value:     []byte("zombie"),
+	err = eng.Put(key, kv.Value{
+		Data:      []byte("zombie"),
 		Timestamp: ts3,
 	})
 	assert.NoError(t, err)
@@ -190,7 +188,7 @@ func TestEngine_SyncLogic(t *testing.T) {
 
 	syncer1 := entropy.NewSyncer(&entropy.SyncerConfig{
 		NodeID:     mockConfig.meshConfig.NodeID,
-		Writer:     eng1.Writer(),
+		Writer:     cluster.NewStorageStateWriter(eng1),
 		Mesh:       &mesh.NopMesh{},
 		MeshConfig: &mockConfig.meshConfig,
 		Hm:         eng1.HM(),
@@ -213,7 +211,7 @@ func TestEngine_SyncLogic(t *testing.T) {
 	// 3. eng2 pushes the updates
 	syncer2 := entropy.NewSyncer(&entropy.SyncerConfig{
 		NodeID:     mockConfig.meshConfig.NodeID,
-		Writer:     eng2.Writer(),
+		Writer:     cluster.NewStorageStateWriter(eng2),
 		Mesh:       &mesh.NopMesh{},
 		MeshConfig: &mockConfig.meshConfig,
 		Hm:         eng2.HM(),

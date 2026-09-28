@@ -47,7 +47,8 @@ func NewNode(coreEngine core.Engine, config Config) (*Node, error) {
 		creds:      config.Creds,
 	}
 
-	gossipService := gossip.NewGossip(coreEngine.Writer())
+	stateWriter := NewStorageStateWriter(coreEngine)
+	gossipService := gossip.NewGossip(stateWriter)
 
 	node.mesh = &mesh.NopMesh{}
 	if !config.MeshConfig.SingleNode {
@@ -62,12 +63,12 @@ func NewNode(coreEngine core.Engine, config Config) (*Node, error) {
 	}
 
 	node.gw = gateway.NewGateway(node.mesh, &node.meshConfig, config.Creds)
-	node.gw.SetStateWriter(coreEngine.Writer())
+	node.gw.SetStateWriter(stateWriter)
 
 	if !config.MeshConfig.SingleNode {
 		node.syncer = entropy.NewSyncer(&entropy.SyncerConfig{
 			NodeID:     config.MeshConfig.NodeID,
-			Writer:     coreEngine.Writer(),
+			Writer:     stateWriter,
 			Mesh:       node.mesh,
 			MeshConfig: &node.meshConfig,
 			Hm:         coreEngine.HM(),
@@ -123,7 +124,7 @@ func (n *Node) Stop() {
 func (n *Node) Get(key kv.Key) ([]byte, bool) {
 	hash := kv.HashKey(security.HashFunc(key))
 	if n.meshConfig.SingleNode {
-		data, ok := n.core.HM().LoadData(key, hash)
+		data, ok := n.core.HM().Get(key)
 		if ok && n.core.Evt() != nil {
 			n.core.Evt().Publish(key, hash)
 		}
@@ -133,7 +134,7 @@ func (n *Node) Get(key kv.Key) ([]byte, bool) {
 	// Only trust local storage while still a current owner: a stale local
 	// copy from before a rebalance must not shadow the real owners (#61).
 	if n.isOwner(key) {
-		iv, ok := n.core.HM().Load(key, hash)
+		iv, ok := n.core.HM().GetRecord(key)
 		if ok && !iv.Tombstone {
 			if n.core.Evt() != nil {
 				n.core.Evt().Publish(key, hash)

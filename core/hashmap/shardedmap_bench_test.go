@@ -5,14 +5,13 @@ import (
 	"testing"
 
 	"github.com/rosewrightdev/oryx/kv"
-	"github.com/rosewrightdev/oryx/security"
 )
 
 func BenchmarkShardedMap_RootDigest(b *testing.B) {
 	sm := NewShardedMap()
 	for i := range 10000 {
 		key := fmt.Sprintf("key-%d", i)
-		sm.Store(key, security.HashFunc(key), kv.Value{
+		sm.Put(key, kv.Value{
 			Data:      []byte("value"),
 			Timestamp: int64(i),
 		})
@@ -28,7 +27,7 @@ func BenchmarkShardedMap_FillShardDigests(b *testing.B) {
 	sm := NewShardedMap()
 	for i := range 10000 {
 		key := fmt.Sprintf("key-%d", i)
-		sm.Store(key, security.HashFunc(key), kv.Value{
+		sm.Put(key, kv.Value{
 			Data:      []byte("value"),
 			Timestamp: int64(i),
 		})
@@ -45,7 +44,7 @@ func BenchmarkShardedMap_FillDigests(b *testing.B) {
 	sm := NewShardedMap()
 	for i := range 10000 {
 		key := fmt.Sprintf("key-%d", i)
-		sm.Store(key, security.HashFunc(key), kv.Value{
+		sm.Put(key, kv.Value{
 			Data:      []byte("value"),
 			Timestamp: int64(i),
 		})
@@ -64,10 +63,9 @@ func BenchmarkShardedMap_FillDigests(b *testing.B) {
 func BenchmarkShardedMap_StoreUpdate(b *testing.B) {
 	sm := NewShardedMap()
 	key := "test-key"
-	hash := security.HashFunc(key)
 
 	// Pre-fill the key
-	sm.Store(key, hash, kv.Value{
+	sm.Put(key, kv.Value{
 		NodeID:    "node-1",
 		Data:      []byte("some-value-payload-of-reasonable-size"),
 		Timestamp: 100,
@@ -75,7 +73,7 @@ func BenchmarkShardedMap_StoreUpdate(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
-		sm.Store(key, hash, kv.Value{
+		sm.Put(key, kv.Value{
 			NodeID:    "node-1",
 			Data:      []byte("some-value-payload-of-reasonable-size"),
 			Timestamp: int64(i + 101),
@@ -86,17 +84,14 @@ func BenchmarkShardedMap_StoreUpdate(b *testing.B) {
 func BenchmarkShardedMap_Delete(b *testing.B) {
 	sm := NewShardedMap()
 	key := "test-key"
-	hash := security.HashFunc(key)
 
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
-		b.StopTimer()
-		sm.Store(key, hash, kv.Value{
+		sm.Put(key, kv.Value{
 			NodeID:    "node-1",
 			Data:      []byte("some-value-payload-of-reasonable-size"),
 			Timestamp: int64(i),
 		})
-		b.StartTimer()
-		sm.Delete(key, hash)
+		sm.Delete(key)
 	}
 }

@@ -10,13 +10,11 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/rosewrightdev/oryx/api"
 	"github.com/rosewrightdev/oryx/core/clock"
 	"github.com/rosewrightdev/oryx/core/evict"
 	"github.com/rosewrightdev/oryx/core/hashmap"
 	"github.com/rosewrightdev/oryx/core/snap"
 	"github.com/rosewrightdev/oryx/core/wal"
-	"github.com/rosewrightdev/oryx/core/writer"
 	"github.com/rosewrightdev/oryx/kv"
 	"github.com/rosewrightdev/oryx/security"
 )
@@ -25,15 +23,14 @@ import (
 type Engine interface {
 	Get(key kv.Key) ([]byte, bool)
 	Set(key kv.Key, value []byte) error
+	Put(key kv.Key, val kv.Value) error
 	Delete(key kv.Key) (bool, error)
+	Exists(key kv.Key) bool
 	Start()
 	Stop()
-	ApplySet(req *pb.SetRequest) error
-	ApplyDelete(req *pb.DeleteRequest) error
 	HM() *hashmap.ShardedMap
 	Wal() wal.Waler
 	Clock() clock.Clocker
-	Writer() *writer.StorageWriter
 	Snp() *snap.Snapshotter
 	Evt() evict.Evictor
 	Evict(key kv.Key, reason evict.Reason) error
@@ -61,7 +58,6 @@ type engine struct {
 	evt             evict.Evictor
 	hm              *hashmap.ShardedMap
 	snp             *snap.Snapshotter
-	sw              *writer.StorageWriter
 	pools           *pools
 	nodeID          kv.NodeID
 	disableSnapshot bool
@@ -70,19 +66,11 @@ type engine struct {
 }
 
 type pools struct {
-	setRequests     sync.Pool
-	deleteRequests  sync.Pool
 	snapshotEntries sync.Pool
 }
 
 func newPools() *pools {
 	return &pools{
-		setRequests: sync.Pool{
-			New: func() any { return &pb.SetRequest{} },
-		},
-		deleteRequests: sync.Pool{
-			New: func() any { return &pb.DeleteRequest{} },
-		},
 		snapshotEntries: sync.Pool{
 			New: func() any { return &snap.SnapshotEntry{} },
 		},
@@ -117,8 +105,6 @@ func NewEngine(config Config) (Engine, error) {
 			slog.Error("Failed to recover database state", "error", err)
 		}
 	}
-
-	eng.sw = writer.NewStorageWriter(eng.hm, eng.wal, eng.clock)
 
 	stateTransferEncoder := func(enc *gob.Encoder) error {
 		var encodeErr error
@@ -189,92 +175,75 @@ func (eng *engine) Stop() {
 }
 
 func (eng *engine) Get(key kv.Key) ([]byte, bool) {
-	hash := kv.HashKey(security.HashFunc(key))
-	iv, ok := eng.hm.Load(key, hash)
-	if ok && !iv.Tombstone {
-		if eng.evt != nil {
-			eng.evt.Publish(key, hash)
-		}
-		return iv.Data, true
+	data, ok := eng.hm.Get(key)
+	if ok && eng.evt != nil {
+		eng.evt.Publish(key, security.HashFunc(key))
 	}
-	return nil, false
+	return data, ok
+}
+
+func (eng *engine) Exists(key kv.Key) bool {
+	_, ok := eng.hm.Get(key)
+	return ok
+}
+
+// Put stores a key-value record with LWW conflict resolution and records it in the WAL.
+func (eng *engine) Put(key kv.Key, val kv.Value) error {
+	eng.clock.Update(val.Timestamp)
+
+	if !eng.hm.PutLWW(key, val) {
+		return nil // Stale update ignored under LWW rules
+	}
+
+	if err := eng.wal.Publish(key, security.HashFunc(key), val); err != nil {
+		return fmt.Errorf("failed to persist write to WAL: %w", err)
+	}
+	return nil
 }
 
 func (eng *engine) Set(key kv.Key, value []byte) error {
-	hash := security.HashFunc(key)
 	if eng.evt != nil {
-		eng.evt.Publish(key, hash)
+		eng.evt.Publish(key, security.HashFunc(key))
 	}
-
-	ts := eng.clock.Now()
-
-	req := eng.pools.setRequests.Get().(*pb.SetRequest)
-	req.Key = key
-	req.Value = value
-	req.Timestamp = ts
-	req.NodeId = string(eng.nodeID)
-
-	err := eng.sw.ApplySet(req)
-	req.Reset()
-	eng.pools.setRequests.Put(req)
-	return err
+	return eng.Put(key, kv.Value{
+		Data:      value,
+		Timestamp: eng.clock.Now(),
+		NodeID:    string(eng.nodeID),
+	})
 }
 
 func (eng *engine) Delete(key kv.Key) (bool, error) {
-	hash := security.HashFunc(key)
-	hk := kv.HashKey(hash)
-	iv, ok := eng.hm.Load(key, hk)
-	if !ok || iv.Tombstone {
+	if !eng.Exists(key) {
 		return false, nil
 	}
 
 	if eng.evt != nil {
-		eng.evt.PublishDelete(key, hash)
+		eng.evt.PublishDelete(key, security.HashFunc(key))
 	}
 
-	ts := eng.clock.Now()
-
-	req := eng.pools.deleteRequests.Get().(*pb.DeleteRequest)
-	req.Key = key
-	req.Timestamp = ts
-	req.NodeId = string(eng.nodeID)
-
-	err := eng.sw.ApplyDelete(req)
-	req.Reset()
-	eng.pools.deleteRequests.Put(req)
+	err := eng.Put(key, kv.Value{
+		Timestamp: eng.clock.Now(),
+		NodeID:    string(eng.nodeID),
+		Tombstone: true,
+	})
 	return true, err
 }
 
 func (eng *engine) Evict(key kv.Key, reason evict.Reason) error {
-	hash := security.HashFunc(key)
 	ts := eng.clock.Now()
-	if reason == evict.ReasonCapacity {
-		eng.hm.Delete(key, hash)
-	} else {
-		eng.hm.Store(key, hash, kv.Value{
-			Timestamp: ts,
-			NodeID:    string(eng.nodeID),
-			Tombstone: true,
-		})
+	val := kv.Value{
+		Timestamp: ts,
+		NodeID:    string(eng.nodeID),
+		Tombstone: true,
 	}
-
-	req := eng.pools.deleteRequests.Get().(*pb.DeleteRequest)
-	req.Key = key
-	req.Timestamp = ts
-	req.NodeId = string(eng.nodeID)
-
-	err := eng.wal.Publish(key, hash, req)
-	req.Reset()
-	eng.pools.deleteRequests.Put(req)
-	return err
-}
-
-func (eng *engine) ApplySet(req *pb.SetRequest) error {
-	return eng.sw.ApplySet(req)
-}
-
-func (eng *engine) ApplyDelete(req *pb.DeleteRequest) error {
-	return eng.sw.ApplyDelete(req)
+	if reason == evict.ReasonCapacity {
+		eng.hm.Delete(key)
+		if err := eng.wal.Publish(key, security.HashFunc(key), val); err != nil {
+			return fmt.Errorf("failed to persist eviction to WAL: %w", err)
+		}
+		return nil
+	}
+	return eng.Put(key, val)
 }
 
 func (eng *engine) HM() *hashmap.ShardedMap {
@@ -287,10 +256,6 @@ func (eng *engine) Wal() wal.Waler {
 
 func (eng *engine) Clock() clock.Clocker {
 	return eng.clock
-}
-
-func (eng *engine) Writer() *writer.StorageWriter {
-	return eng.sw
 }
 
 func (eng *engine) Snp() *snap.Snapshotter {
@@ -331,7 +296,7 @@ func (eng *engine) recover(snpPath string) error {
 				}
 				return err
 			}
-			eng.hm.Store(entry.Key, security.HashFunc(entry.Key), kv.Value{
+			eng.hm.Put(entry.Key, kv.Value{
 				Data:      entry.Data,
 				Timestamp: entry.Timestamp,
 				NodeID:    string(entry.NodeID),
@@ -351,8 +316,7 @@ func (eng *engine) recover(snpPath string) error {
 		return err
 	}
 	for k, v := range updates {
-		h := security.HashFunc(k)
-		eng.hm.StoreLWW(k, h, v)
+		eng.hm.PutLWW(k, v)
 	}
 	if len(updates) > 0 {
 		slog.Info("Replayed updates from WAL", "count", len(updates))

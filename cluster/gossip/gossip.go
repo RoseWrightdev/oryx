@@ -6,20 +6,23 @@ import (
 	"sync"
 
 	pb "github.com/rosewrightdev/oryx/api"
-	"github.com/rosewrightdev/oryx/core/writer"
 	"google.golang.org/protobuf/proto"
 )
 
-
+// StateWriter defines the interface for applying sets and deletes to the state.
+type StateWriter interface {
+	ApplySet(req *pb.SetRequest) error
+	ApplyDelete(req *pb.DeleteRequest) error
+}
 
 // Gossip manages the replication of messages received via gossip protocols.
 type Gossip struct {
-	writer         writer.StateWriter
+	writer         StateWriter
 	walEntriesPool sync.Pool
 }
 
 // NewGossip creates a new Gossip instance that handles incoming UDP replication messages.
-func NewGossip(w writer.StateWriter) *Gossip {
+func NewGossip(w StateWriter) *Gossip {
 	return &Gossip{
 		writer: w,
 		walEntriesPool: sync.Pool{

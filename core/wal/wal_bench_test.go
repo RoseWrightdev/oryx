@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/rosewrightdev/oryx/api"
+	"github.com/rosewrightdev/oryx/kv"
 	"github.com/rosewrightdev/oryx/security"
 )
 
@@ -26,13 +26,12 @@ func BenchmarkWAL_Publish(b *testing.B) {
 	wal.Start()
 	defer wal.Stop()
 
-	req := pb.SetRequest{Key: "key", Value: []byte("val"), Timestamp: 100}
+	val := kv.Value{Data: []byte("val"), Timestamp: 100, NodeID: "n1"}
 
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
 		key := fmt.Sprintf("k-%d", i)
-		req.Key = key
-		_ = wal.Publish(key, security.HashFunc(key), &req)
+		_ = wal.Publish(key, security.HashFunc(key), val)
 	}
 }
 
@@ -51,11 +50,10 @@ func BenchmarkWAL_Replay(b *testing.B) {
 	}
 	wal.Start()
 
-	req := pb.SetRequest{Key: "key", Value: []byte("val"), Timestamp: 100}
+	val := kv.Value{Data: []byte("val"), Timestamp: 100, NodeID: "n1"}
 	for i := range 10000 {
 		key := fmt.Sprintf("k-%d", i)
-		req.Key = key
-		_ = wal.Publish(key, security.HashFunc(key), &req)
+		_ = wal.Publish(key, security.HashFunc(key), val)
 	}
 	wal.Stop()
 
@@ -84,11 +82,10 @@ func BenchmarkWAL_Clear(b *testing.B) {
 	wal.Start()
 	defer wal.Stop()
 
-	req := pb.SetRequest{Key: "key", Value: []byte("val"), Timestamp: 100}
+	val := kv.Value{Data: []byte("val"), Timestamp: 100, NodeID: "n1"}
 	for i := range 1000 {
 		key := fmt.Sprintf("k-%d", i)
-		req.Key = key
-		_ = wal.Publish(key, security.HashFunc(key), &req)
+		_ = wal.Publish(key, security.HashFunc(key), val)
 	}
 	offsets, _ := wal.PrepareSnapshot()
 
